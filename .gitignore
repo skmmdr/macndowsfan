@@ -1,0 +1,7 @@
+/target
+/dist
+/flutter_ui/build
+/flutter_ui/.dart_tool
+/flutter_ui/.flutter-plugins
+/flutter_ui/.flutter-plugins-dependencies
+/installer/output

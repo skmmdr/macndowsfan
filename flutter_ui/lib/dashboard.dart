@@ -1,0 +1,1353 @@
+import 'dart:io';
+import 'dart:math' as math;
+
+import 'package:flutter/material.dart';
+
+import 'controller.dart';
+import 'models.dart';
+import 'theme.dart';
+import 'widgets/fan_curve.dart';
+import 'widgets/fan_gauge.dart';
+import 'widgets/glass_card.dart';
+import 'widgets/sensor_card.dart';
+import 'widgets/status_pill.dart';
+
+class Dashboard extends StatelessWidget {
+  const Dashboard({
+    super.key,
+    required this.controller,
+    required this.version,
+    this.onQuit,
+    required this.onCompact,
+  });
+
+  final MonitorController controller;
+  final String version;
+  final VoidCallback? onQuit;
+  final VoidCallback onCompact;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) {
+        final snap = controller.snapshot;
+        return Stack(
+          children: [
+            const _Background(),
+            SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(22, 16, 22, 12),
+                child: Column(
+                  children: [
+                    _Header(controller: controller, onQuit: onQuit, onCompact: onCompact),
+                    if (controller.actionError != null) ...[
+                      const SizedBox(height: 10),
+                      _ActionError(text: controller.actionError!),
+                    ],
+                    const SizedBox(height: 14),
+                    Expanded(
+                      child: (!snap.ok && snap.fans.isEmpty)
+                          ? _ErrorView(controller: controller, version: version)
+                          : LayoutBuilder(
+                              builder: (context, constraints) {
+                                final wide = constraints.maxWidth >= 1020;
+                                if (wide) {
+                                  return Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Expanded(
+                                        flex: 5,
+                                        child: _ScrollColumn(
+                                          child: _FanColumn(
+                                              controller: controller),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 16),
+                                      Expanded(
+                                        flex: 6,
+                                        child: _ScrollColumn(
+                                          child: _SensorsPanel(
+                                              controller: controller),
+                                        ),
+                                      ),
+                                    ],
+                                  );
+                                }
+                                return SingleChildScrollView(
+                                  child: Column(
+                                    children: [
+                                      _FanColumn(controller: controller),
+                                      const SizedBox(height: 16),
+                                      _SensorsPanel(controller: controller),
+                                    ],
+                                  ),
+                                );
+                              },
+                            ),
+                    ),
+                    const SizedBox(height: 8),
+                    _Footer(controller: controller, version: version),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _ScrollColumn extends StatefulWidget {
+  const _ScrollColumn({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_ScrollColumn> createState() => _ScrollColumnState();
+}
+
+class _ScrollColumnState extends State<_ScrollColumn> {
+  final ScrollController _controller = ScrollController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scrollbar(
+      controller: _controller,
+      thumbVisibility: false,
+      child: SingleChildScrollView(
+        controller: _controller,
+        child: widget.child,
+      ),
+    );
+  }
+}
+
+class _Background extends StatelessWidget {
+  const _Background();
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [AppColors.bg, AppColors.bg2, Color(0xFF090D14)],
+          ),
+        ),
+        child: Stack(
+          children: const [
+            Positioned(
+              top: -180,
+              right: -120,
+              child: _Glow(size: 560, color: AppColors.accent, opacity: 0.10),
+            ),
+            Positioned(
+              bottom: -220,
+              left: -160,
+              child: _Glow(size: 540, color: AppColors.accent2, opacity: 0.08),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _Glow extends StatelessWidget {
+  const _Glow({
+    required this.size,
+    required this.color,
+    required this.opacity,
+  });
+
+  final double size;
+  final Color color;
+  final double opacity;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: RadialGradient(
+          colors: [
+            color.withValues(alpha: opacity),
+            color.withValues(alpha: 0.0),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _Header extends StatelessWidget {
+  const _Header({required this.controller, required this.onCompact, this.onQuit});
+
+  final MonitorController controller;
+  final VoidCallback onCompact;
+  final VoidCallback? onQuit;
+
+  @override
+  Widget build(BuildContext context) {
+    final snap = controller.snapshot;
+    return Row(
+      children: [
+        const _Logo(),
+        const SizedBox(width: 12),
+        const Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'macndowsfan',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.w600,
+                letterSpacing: -0.2,
+              ),
+            ),
+            SizedBox(height: 2),
+            Text(
+              'iMac14,2  ·  Rust core  ·  Flutter UI',
+              style: TextStyle(fontSize: 11, color: AppColors.muted),
+            ),
+          ],
+        ),
+        const Spacer(),
+        TextButton.icon(
+          onPressed: onCompact,
+          icon: const Icon(Icons.picture_in_picture_alt_outlined, size: 17),
+          label: const Text('Widget'),
+        ),
+        const SizedBox(width: 8),
+        StatusPill(ok: snap.ok, hasError: snap.error != null),
+        const SizedBox(width: 10),
+        if (snap.updatedMs > 0) _Updated(updatedMs: snap.updatedMs),
+        const SizedBox(width: 12),
+        FilledButton.icon(
+          onPressed: controller.restoreAutomatic,
+          icon: const Icon(Icons.restore_rounded, size: 16),
+          label: const Text('Restore automatic'),
+        ),
+        const SizedBox(width: 4),
+        IconButton(
+          tooltip: 'Reconnect SMC',
+          onPressed: controller.reconnect,
+          icon: const Icon(Icons.refresh_rounded, size: 19),
+        ),
+        if (onQuit != null)
+          Padding(
+            padding: const EdgeInsets.only(left: 4),
+            child: TextButton(
+              onPressed: onQuit,
+              style: TextButton.styleFrom(
+                foregroundColor: AppColors.muted,
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: const Text('Quit', style: TextStyle(fontSize: 12)),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _Logo extends StatelessWidget {
+  const _Logo();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 42,
+      height: 42,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(13),
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [AppColors.accent, AppColors.accent2],
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.accent.withValues(alpha: 0.30),
+            blurRadius: 22,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: const Icon(
+        Icons.air_rounded,
+        size: 23,
+        color: Color(0xFF071019),
+      ),
+    );
+  }
+}
+
+class _Updated extends StatelessWidget {
+  const _Updated({required this.updatedMs});
+
+  final int updatedMs;
+
+  @override
+  Widget build(BuildContext context) {
+    final age =
+        (DateTime.now().millisecondsSinceEpoch - updatedMs).clamp(0, 999999);
+    final text = age < 1000
+        ? 'updated just now'
+        : 'updated ${(age / 1000).toStringAsFixed(1)}s ago';
+    return Text(
+      text,
+      style: const TextStyle(fontSize: 10.5, color: AppColors.muted),
+    );
+  }
+}
+
+class _ActionError extends StatelessWidget {
+  const _ActionError({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppColors.red.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.red.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.warning_amber_rounded,
+              size: 16, color: AppColors.red),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              style: const TextStyle(fontSize: 12, color: AppColors.red),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FanColumn extends StatelessWidget {
+  const _FanColumn({required this.controller});
+
+  final MonitorController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final fans = controller.snapshot.fans;
+    if (fans.isEmpty) {
+      return const GlassCard(
+        child: SizedBox(
+          height: 160,
+          child: Center(
+            child: Text(
+              'Waiting for fan data…',
+              style: TextStyle(color: AppColors.muted),
+            ),
+          ),
+        ),
+      );
+    }
+
+    final index = controller.selectedFan.clamp(0, fans.length - 1).toInt();
+    final fan = fans[index];
+    final setting = controller.fanSetting(index) ?? FanSetting();
+    final lo = fan.minRpm > 0 ? fan.minRpm : 800.0;
+    final hi = fan.maxRpm > lo ? fan.maxRpm : lo + 1;
+
+    return Column(
+      children: [
+        if (fans.length > 1) ...[
+          Wrap(
+            spacing: 8,
+            children: [
+              for (var i = 0; i < fans.length; i++)
+                ChoiceChip(
+                  label: Text(fans[i].name),
+                  selected: i == index,
+                  onSelected: (_) => controller.selectFan(i),
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+        ],
+        GlassCard(
+          padding: const EdgeInsets.fromLTRB(18, 14, 18, 14),
+          gradient: const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Color(0xFF16202D), Color(0xFF0E141D)],
+          ),
+          child: Column(
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          fan.name,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          '${fan.minRpm.round()} – ${fan.maxRpm.round()} RPM · ${fan.valueType}',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: AppColors.muted,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  _Tag(
+                    text: fan.forced ? 'FORCED' : 'AUTO',
+                    color: fan.forced ? AppColors.accent : AppColors.green,
+                  ),
+                  if (fan.target != null) ...[
+                    const SizedBox(width: 8),
+                    _Tag(
+                      text: 'TARGET ${fan.target!.round()}',
+                      color: AppColors.muted,
+                    ),
+                  ],
+                ],
+              ),
+              const SizedBox(height: 6),
+              Center(
+                child: FanGauge(
+                  rpm: fan.actual,
+                  minRpm: fan.minRpm,
+                  maxRpm: fan.maxRpm,
+                  name: fan.name,
+                  size: 210,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Wrap(
+                alignment: WrapAlignment.center,
+                spacing: 8,
+                runSpacing: 6,
+                children: [
+                  _Chip('mode key ${fan.modeKey}'),
+                  _Chip(fan.controllable ? 'controllable' : 'read-only'),
+                  if (setting.mode == ControlMode.constant)
+                    _Chip('profile ${setting.rpm.round()} RPM'),
+                  if (setting.mode == ControlMode.sensor)
+                    _Chip('sensor ${setting.sensor}'),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        GlassCard(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const _SectionLabel('PROFILE'),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final profile in FanProfile.values)
+                    _ProfileChip(
+                      label: profile.label,
+                      tooltip: profile.hint,
+                      selected: setting.profile == profile.id,
+                      onTap: () => controller.applyProfile(index, profile),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              const _SectionLabel('MODE'),
+              const SizedBox(height: 8),
+              SegmentedButton<ControlMode>(
+                segments: const [
+                  ButtonSegment(
+                    value: ControlMode.automatic,
+                    icon: Icon(Icons.auto_mode_rounded, size: 16),
+                    label: Text('Automatic'),
+                  ),
+                  ButtonSegment(
+                    value: ControlMode.constant,
+                    icon: Icon(Icons.speed_rounded, size: 16),
+                    label: Text('Constant'),
+                  ),
+                  ButtonSegment(
+                    value: ControlMode.sensor,
+                    icon: Icon(Icons.thermostat_rounded, size: 16),
+                    label: Text('Sensor'),
+                  ),
+                ],
+                selected: {setting.mode},
+                showSelectedIcon: false,
+                expandedInsets: EdgeInsets.zero,
+                onSelectionChanged: (selection) =>
+                    controller.setMode(index, selection.first),
+              ),
+              const SizedBox(height: 14),
+              AnimatedSize(
+                duration: const Duration(milliseconds: 240),
+                curve: Curves.easeOutCubic,
+                alignment: Alignment.topCenter,
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 220),
+                  switchInCurve: Curves.easeOut,
+                  switchOutCurve: Curves.easeIn,
+                  transitionBuilder: (child, animation) => FadeTransition(
+                    opacity: animation,
+                    child: SlideTransition(
+                      position: Tween<Offset>(
+                        begin: const Offset(0, 0.03),
+                        end: Offset.zero,
+                      ).animate(animation),
+                      child: child,
+                    ),
+                  ),
+                  child: switch (setting.mode) {
+                    ControlMode.automatic => _AutomaticControls(
+                        key: const ValueKey('auto'),
+                        fan: fan,
+                      ),
+                    ControlMode.constant => _ConstantControls(
+                        key: const ValueKey('constant'),
+                        controller: controller,
+                        index: index,
+                        setting: setting,
+                        minRpm: lo,
+                        maxRpm: hi,
+                      ),
+                    ControlMode.sensor => _SensorControls(
+                        key: const ValueKey('sensor'),
+                        controller: controller,
+                        index: index,
+                        setting: setting,
+                        fan: fan,
+                      ),
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _AutomaticControls extends StatelessWidget {
+  const _AutomaticControls({super.key, required this.fan});
+
+  final FanReading fan;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.green.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.green.withValues(alpha: 0.16)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.shield_outlined, color: AppColors.green, size: 20),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              'The Mac firmware decides the speed for ${fan.name}. '
+              'Thermal policy stays untouched.',
+              style: const TextStyle(
+                fontSize: 12,
+                color: AppColors.muted,
+                height: 1.45,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ConstantControls extends StatelessWidget {
+  const _ConstantControls({
+    super.key,
+    required this.controller,
+    required this.index,
+    required this.setting,
+    required this.minRpm,
+    required this.maxRpm,
+  });
+
+  final MonitorController controller;
+  final int index;
+  final FanSetting setting;
+  final double minRpm;
+  final double maxRpm;
+
+  @override
+  Widget build(BuildContext context) {
+    final divisions = math.max(1, ((maxRpm - minRpm) / 50).round());
+    final mid = (minRpm + maxRpm) / 2;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Text(
+              'Target speed',
+              style: TextStyle(fontSize: 12, color: AppColors.muted),
+            ),
+            const Spacer(),
+            _ValueChip(
+              '${setting.rpm.round()} RPM',
+              AppColors.accent,
+            ),
+          ],
+        ),
+        Slider(
+          value: setting.rpm.clamp(minRpm, maxRpm).toDouble(),
+          min: minRpm,
+          max: maxRpm,
+          divisions: divisions,
+          label: '${setting.rpm.round()} RPM',
+          onChanged: (v) => controller.setRpm(index, v),
+        ),
+        Row(
+          children: [
+            _PresetChip(
+              label: 'Min',
+              onTap: () => controller.setRpm(index, minRpm),
+            ),
+            const SizedBox(width: 8),
+            _PresetChip(
+              label: 'Mid',
+              onTap: () => controller.setRpm(index, mid),
+            ),
+            const SizedBox(width: 8),
+            _PresetChip(
+              label: 'Max',
+              onTap: () => controller.setRpm(index, maxRpm),
+            ),
+            const Spacer(),
+            Text(
+              '${minRpm.round()} – ${maxRpm.round()} RPM',
+              style: const TextStyle(fontSize: 10.5, color: AppColors.muted),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _SensorControls extends StatelessWidget {
+  const _SensorControls({
+    super.key,
+    required this.controller,
+    required this.index,
+    required this.setting,
+    required this.fan,
+  });
+
+  final MonitorController controller;
+  final int index;
+  final FanSetting setting;
+  final FanReading fan;
+
+  @override
+  Widget build(BuildContext context) {
+    final temps = controller.snapshot.temps;
+    final hasSensor = temps.any((t) => t.key == setting.sensor);
+    final current = controller.tempValue(setting.sensor);
+    final lo = fan.minRpm > 0 ? fan.minRpm : 800.0;
+    final hi = fan.maxRpm > lo ? fan.maxRpm : lo + 1;
+    final target = sensorTarget(current, setting.startTemp, setting.maxTemp, lo, hi);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Text(
+              'Follow sensor',
+              style: TextStyle(fontSize: 12, color: AppColors.muted),
+            ),
+            const Spacer(),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Container(
+          height: 44,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.03),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: AppColors.border),
+          ),
+          child: DropdownButtonHideUnderline(
+            child: DropdownButton<String>(
+              value: hasSensor ? setting.sensor : null,
+              hint: const Text(
+                'Select a sensor',
+                style: TextStyle(fontSize: 12, color: AppColors.muted),
+              ),
+              isExpanded: true,
+              dropdownColor: AppColors.card2,
+              borderRadius: BorderRadius.circular(12),
+              icon: const Icon(Icons.expand_more_rounded, size: 18),
+              style: const TextStyle(fontSize: 12, color: AppColors.text),
+              items: [
+                for (final t in temps)
+                  DropdownMenuItem(
+                    value: t.key,
+                    child: Text(
+                      '${t.label} · ${t.key}${t.value == null ? '' : '  ${t.value!.toStringAsFixed(1)} °C'}',
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+              ],
+              onChanged: (value) {
+                if (value != null) controller.setSensor(index, value);
+              },
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        _SliderRow(
+          label: 'Start at',
+          value: setting.startTemp,
+          min: 30,
+          max: math.max(31, setting.maxTemp - 1),
+          suffix: ' °C',
+          onChanged: (v) => controller.setTemperatures(index, start: v),
+        ),
+        _SliderRow(
+          label: 'Full speed at',
+          value: setting.maxTemp,
+          min: setting.startTemp + 1,
+          max: 105,
+          suffix: ' °C',
+          onChanged: (v) => controller.setTemperatures(index, max: v),
+        ),
+        const SizedBox(height: 2),
+        FanCurve(
+          start: setting.startTemp,
+          max: setting.maxTemp,
+          minRpm: lo,
+          maxRpm: hi,
+          currentTemp: current,
+        ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            Text(
+              current == null
+                  ? 'No reading from ${setting.sensor}'
+                  : '${setting.sensor} now ${current.toStringAsFixed(1)} °C',
+              style: const TextStyle(fontSize: 11, color: AppColors.muted),
+            ),
+            const Spacer(),
+            _ValueChip('${target.round()} RPM', AppColors.accent),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _SliderRow extends StatelessWidget {
+  const _SliderRow({
+    required this.label,
+    required this.value,
+    required this.min,
+    required this.max,
+    required this.suffix,
+    required this.onChanged,
+  });
+
+  final String label;
+  final double value;
+  final double min;
+  final double max;
+  final String suffix;
+  final ValueChanged<double> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final hi = max > min ? max : min + 1;
+    final v = value.clamp(min, hi).toDouble();
+    return Column(
+      children: [
+        Row(
+          children: [
+            Text(
+              label,
+              style: const TextStyle(fontSize: 11.5, color: AppColors.muted),
+            ),
+            const Spacer(),
+            Text(
+              '${v.round()}$suffix',
+              style: const TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+        SizedBox(
+          height: 34,
+          child: Slider(
+            value: v,
+            min: min,
+            max: hi,
+            onChanged: onChanged,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _SensorsPanel extends StatelessWidget {
+  const _SensorsPanel({required this.controller});
+
+  final MonitorController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final temps = controller.snapshot.temps;
+    final setting = controller.fanSetting(controller.selectedFan);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.thermostat_rounded,
+                size: 17, color: AppColors.muted),
+            const SizedBox(width: 8),
+            const Text(
+              'Temperatures',
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(width: 8),
+            _Chip('${temps.length}'),
+            const Spacer(),
+            const Text(
+              'click a card to follow it',
+              style: TextStyle(fontSize: 10.5, color: AppColors.muted),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        if (temps.isEmpty)
+          const GlassCard(
+            child: SizedBox(
+              height: 120,
+              child: Center(
+                child: Text(
+                  'No temperature sensors available.',
+                  style: TextStyle(color: AppColors.muted),
+                ),
+              ),
+            ),
+          )
+        else
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final columns = constraints.maxWidth > 780
+                  ? 3
+                  : constraints.maxWidth > 420
+                      ? 2
+                      : 1;
+              const gap = 12.0;
+              final width =
+                  (constraints.maxWidth - gap * (columns - 1)) / columns;
+              return Wrap(
+                spacing: gap,
+                runSpacing: gap,
+                children: [
+                  for (final t in temps)
+                    SizedBox(
+                      width: width,
+                      child: Tooltip(
+                        message:
+                            '${sensorHint(t.key)}\n\nClick to follow ${t.label}',
+                        child: SensorCard(
+                          reading: t,
+                          history: controller.history[t.key] ?? const [],
+                          selected: setting?.mode == ControlMode.sensor &&
+                              setting?.sensor == t.key,
+                          onTap: () {
+                            controller.setSensor(
+                                controller.selectedFan, t.key);
+                            controller.setMode(
+                                controller.selectedFan, ControlMode.sensor);
+                          },
+                        ),
+                      ),
+                    ),
+                ],
+              );
+            },
+          ),
+      ],
+    );
+  }
+}
+
+class _Footer extends StatelessWidget {
+  const _Footer({required this.controller, required this.version});
+
+  final MonitorController controller;
+  final String version;
+
+  @override
+  Widget build(BuildContext context) {
+    final snap = controller.snapshot;
+    final savedAt = controller.savedAt;
+    return Row(
+      children: [
+        _Chip(snap.modeStyle ?? 'SMC'),
+        if (snap.keyCount != null) ...[
+          const SizedBox(width: 6),
+          _Chip('${snap.keyCount} keys'),
+        ],
+        const Spacer(),
+        if (controller.applying)
+          const Row(
+            children: [
+              SizedBox(
+                width: 11,
+                height: 11,
+                child: CircularProgressIndicator(strokeWidth: 1.6),
+              ),
+              SizedBox(width: 8),
+              Text(
+                'Applying…',
+                style: TextStyle(fontSize: 10.5, color: AppColors.muted),
+              ),
+            ],
+          )
+        else if (savedAt != null)
+          Text(
+            'Saved ${_clock(savedAt)}',
+            style: const TextStyle(fontSize: 10.5, color: AppColors.muted),
+          ),
+        const SizedBox(width: 12),
+        Text(
+          'v$version',
+          style: const TextStyle(fontSize: 10.5, color: AppColors.muted),
+        ),
+      ],
+    );
+  }
+
+  static String _clock(DateTime t) =>
+      '${t.hour.toString().padLeft(2, '0')}:'
+      '${t.minute.toString().padLeft(2, '0')}:'
+      '${t.second.toString().padLeft(2, '0')}';
+}
+
+class _ErrorView extends StatelessWidget {
+  const _ErrorView({required this.controller, required this.version});
+
+  final MonitorController controller;
+  final String version;
+
+  @override
+  Widget build(BuildContext context) {
+    final snap = controller.snapshot;
+    final error = snap.error ?? 'The SMC device could not be opened.';
+    final hint = snap.hint;
+
+    return Center(
+      child: SingleChildScrollView(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 660),
+          child: GlassCard(
+            padding: const EdgeInsets.all(26),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: AppColors.red.withValues(alpha: 0.10),
+                        borderRadius: BorderRadius.circular(13),
+                        border: Border.all(
+                          color: AppColors.red.withValues(alpha: 0.25),
+                        ),
+                      ),
+                      child: const Icon(Icons.cloud_off_rounded,
+                          color: AppColors.red, size: 22),
+                    ),
+                    const SizedBox(width: 14),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Cannot talk to the SMC',
+                            style: TextStyle(
+                              fontSize: 17,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          SizedBox(height: 2),
+                          Text(
+                            'The fan and temperature hardware is not reachable.',
+                            style: TextStyle(
+                                fontSize: 11.5, color: AppColors.muted),
+                          ),
+                        ],
+                      ),
+                    ),
+                    StatusPill(
+                      ok: false,
+                      hasError: true,
+                      label: 'offline',
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                _InfoLine(icon: Icons.error_outline_rounded, text: error),
+                if (hint != null && hint.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  _InfoLine(
+                    icon: Icons.lightbulb_outline_rounded,
+                    text: hint,
+                    color: AppColors.amber,
+                  ),
+                ],
+                const SizedBox(height: 16),
+                const _Bullet(
+                  'Quit Macs Fan Control from its tray icon — it opens '
+                  '\\\\.\\APPLESMC exclusively.',
+                ),
+                const _Bullet(
+                  'If the AppleSMC driver service is stopped, restart this '
+                  'app as administrator.',
+                ),
+                const _Bullet(
+                  'The signed applesmc.sys driver is installed by Macs Fan '
+                  'Control and remains after it is closed.',
+                ),
+                const SizedBox(height: 18),
+                Row(
+                  children: [
+                    FilledButton.icon(
+                      onPressed: controller.reconnect,
+                      icon: const Icon(Icons.refresh_rounded, size: 16),
+                      label: const Text('Retry connection'),
+                    ),
+                    const SizedBox(width: 10),
+                    TextButton.icon(
+                      onPressed: _openLogFolder,
+                      icon: const Icon(Icons.folder_open_rounded, size: 16),
+                      label: const Text('Open log folder'),
+                    ),
+                    const Spacer(),
+                    Text(
+                      'v$version',
+                      style: const TextStyle(
+                          fontSize: 10.5, color: AppColors.muted),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _openLogFolder() {
+    final appData = Platform.environment['APPDATA'];
+    if (appData == null) return;
+    final dir = Directory('$appData\\MacndowsFan');
+    if (!dir.existsSync()) dir.createSync(recursive: true);
+    Process.run('explorer.exe', [dir.path]);
+  }
+}
+
+class _InfoLine extends StatelessWidget {
+  const _InfoLine({
+    required this.icon,
+    required this.text,
+    this.color = AppColors.red,
+  });
+
+  final IconData icon;
+  final String text;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 15, color: color),
+        const SizedBox(width: 8),
+        Expanded(
+          child: SelectableText(
+            text,
+            style: TextStyle(
+              fontSize: 12,
+              color: color == AppColors.red ? AppColors.text : color,
+              height: 1.45,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _Bullet extends StatelessWidget {
+  const _Bullet(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.only(top: 6),
+            child: CircleAvatar(radius: 2, backgroundColor: AppColors.muted),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              text,
+              style: const TextStyle(
+                fontSize: 11.5,
+                color: AppColors.muted,
+                height: 1.45,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SectionLabel extends StatelessWidget {
+  const _SectionLabel(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      text,
+      style: const TextStyle(
+        fontSize: 10,
+        letterSpacing: 2,
+        color: AppColors.muted,
+        fontWeight: FontWeight.w600,
+      ),
+    );
+  }
+}
+
+class _Chip extends StatelessWidget {
+  const _Chip(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.035),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(fontSize: 10, color: AppColors.muted),
+      ),
+    );
+  }
+}
+
+class _Tag extends StatelessWidget {
+  const _Tag({required this.text, required this.color});
+
+  final String text;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.09),
+        borderRadius: BorderRadius.circular(7),
+        border: Border.all(color: color.withValues(alpha: 0.28)),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(
+          fontSize: 9.5,
+          letterSpacing: 0.8,
+          fontWeight: FontWeight.w700,
+          color: color,
+        ),
+      ),
+    );
+  }
+}
+
+class _ValueChip extends StatelessWidget {
+  const _ValueChip(this.text, this.color);
+
+  final String text;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(9),
+        border: Border.all(color: color.withValues(alpha: 0.25)),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(
+          fontSize: 11.5,
+          fontWeight: FontWeight.w600,
+          color: color,
+        ),
+      ),
+    );
+  }
+}
+
+class _PresetChip extends StatelessWidget {
+  const _PresetChip({required this.label, required this.onTap});
+
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.04),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: AppColors.border),
+          ),
+          child: Text(
+            label,
+            style: const TextStyle(fontSize: 10.5, color: AppColors.muted),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ProfileChip extends StatelessWidget {
+  const _ProfileChip({
+    required this.label,
+    required this.tooltip,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final String tooltip;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: onTap,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 160),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: selected
+                  ? AppColors.accent.withValues(alpha: 0.14)
+                  : Colors.white.withValues(alpha: 0.035),
+              borderRadius: BorderRadius.circular(9),
+              border: Border.all(
+                color: selected
+                    ? AppColors.accent.withValues(alpha: 0.55)
+                    : AppColors.border,
+              ),
+            ),
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 10.5,
+                fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                color: selected ? AppColors.accent : AppColors.muted,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+
+
+
