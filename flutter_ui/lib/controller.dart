@@ -63,27 +63,13 @@ class MonitorController extends ChangeNotifier {
 
   void _ensureSettings() {
     if (snapshot.fans.isEmpty) return;
-    while (settings.fans.length < snapshot.fans.length) {
-      final f = snapshot.fans[settings.fans.length];
-      final preferred = snapshot.temps.isNotEmpty
-          ? snapshot.temps.first.key
-          : 'TC0P';
-      settings.fans.add(FanSetting(
-        mode: ControlMode.automatic,
-        rpm: _clamp((f.minRpm + f.maxRpm) / 2, f),
-        sensor: preferred,
-        startTemp: 55,
-        maxTemp: 85,
-      ));
-    }
-    for (var i = 0; i < snapshot.fans.length; i++) {
-      final f = snapshot.fans[i];
-      final s = settings.fans[i];
-      s.rpm = _clamp(s.rpm, f);
-      final sensorExists = snapshot.temps.any((t) => t.key == s.sensor);
-      if (!sensorExists && snapshot.temps.isNotEmpty) {
-        s.sensor = snapshot.temps.first.key;
+    selectedFan = selectedFan.clamp(0, snapshot.fans.length - 1);
+    for (final f in snapshot.fans) {
+      while (settings.fans.length <= f.index) {
+        settings.fans.add(FanSetting());
       }
+      final s = settings.fans[f.index];
+      if (f.controllable) s.rpm = _clamp(s.rpm, f);
       if (s.maxTemp <= s.startTemp) s.maxTemp = s.startTemp + 1;
     }
   }
@@ -95,8 +81,10 @@ class MonitorController extends ChangeNotifier {
   }
 
   FanSetting? fanSetting(int index) {
-    if (index < 0 || index >= settings.fans.length) return null;
-    return settings.fans[index];
+    if (index < 0 || index >= snapshot.fans.length) return null;
+    final hardwareIndex = snapshot.fans[index].index;
+    if (hardwareIndex >= settings.fans.length) return null;
+    return settings.fans[hardwareIndex];
   }
 
   FanReading? fanReading(int index) {
@@ -122,14 +110,38 @@ class MonitorController extends ChangeNotifier {
     mutate(setting);
     setting.profile = FanProfile.custom.id;
     final reading = fanReading(index);
-    if (reading != null) setting.rpm = _clamp(setting.rpm, reading);
+    if (reading != null && reading.controllable) {
+      setting.rpm = _clamp(setting.rpm, reading);
+    }
     _scheduleApply();
     notifyListeners();
+  }
+
+  String? profileUnavailableReason(int index, FanProfile profile) {
+    if (profile != FanProfile.automatic &&
+        profile != FanProfile.custom &&
+        fanReading(index)?.controllable != true) {
+      return '${profile.label} is unavailable: the fan or its SMC speed limits could not be verified.';
+    }
+    final sensor = profile.requiredSensor;
+    if (sensor != null) {
+      final value = tempValue(sensor);
+      if (value == null || !value.isFinite || value < 0 || value > 110) {
+        return '${profile.label} is unavailable: required sensor $sensor has no valid reading. Try again when the sensor is available.';
+      }
+    }
+    return null;
   }
 
   void applyProfile(int index, FanProfile profile) {
     final setting = fanSetting(index);
     if (setting == null) return;
+    final reason = profileUnavailableReason(index, profile);
+    if (reason != null) {
+      actionError = reason;
+      notifyListeners();
+      return;
+    }
     final reading = fanReading(index);
 
     switch (profile) {
@@ -137,17 +149,17 @@ class MonitorController extends ChangeNotifier {
         setting.mode = ControlMode.automatic;
       case FanProfile.quiet:
         setting.mode = ControlMode.sensor;
-        setting.sensor = 'TC0P';
+        setting.sensor = profile.requiredSensor!;
         setting.startTemp = 65;
         setting.maxTemp = 90;
       case FanProfile.balanced:
         setting.mode = ControlMode.sensor;
-        setting.sensor = 'TC0P';
+        setting.sensor = profile.requiredSensor!;
         setting.startTemp = 55;
         setting.maxTemp = 85;
       case FanProfile.gaming:
         setting.mode = ControlMode.sensor;
-        setting.sensor = 'TG0d';
+        setting.sensor = profile.requiredSensor!;
         setting.startTemp = 65;
         setting.maxTemp = 85;
       case FanProfile.max:
@@ -158,7 +170,9 @@ class MonitorController extends ChangeNotifier {
     }
 
     setting.profile = profile.id;
-    if (reading != null) setting.rpm = _clamp(setting.rpm, reading);
+    if (reading != null && reading.controllable) {
+      setting.rpm = _clamp(setting.rpm, reading);
+    }
     _scheduleApply();
     notifyListeners();
   }
@@ -168,6 +182,11 @@ class MonitorController extends ChangeNotifier {
   }
 
   void setMode(int index, ControlMode mode) {
+    if (mode != ControlMode.automatic && fanReading(index)?.controllable != true) {
+      actionError = 'Manual control is unavailable: the fan or its SMC speed limits could not be verified.';
+      notifyListeners();
+      return;
+    }
     updateFan(index, (s) => s.mode = mode);
   }
 
@@ -198,7 +217,9 @@ class MonitorController extends ChangeNotifier {
     } else {
       actionError = result['error']?.toString() ?? 'failed to apply settings';
     }
-    snapshot = Snapshot.fromJson(api.sample(handle));
+    if (result['ok'] == true) {
+      snapshot = Snapshot.fromJson(api.sample(handle));
+    }
     notifyListeners();
   }
 
@@ -207,7 +228,10 @@ class MonitorController extends ChangeNotifier {
       f.mode = ControlMode.automatic;
       f.profile = FanProfile.automatic.id;
     }
-    api.restoreAuto(handle);
+    final result = api.restoreAuto(handle);
+    actionError = result['ok'] == true
+        ? null
+        : result['error']?.toString() ?? 'Failed to restore automatic fan control';
     _scheduleApply();
     notifyListeners();
   }
@@ -218,20 +242,30 @@ class MonitorController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void prepareExit() {
+  bool prepareExit() {
+    // Keep the saved profile, but do not quit until restoration is confirmed.
+    try {
+      final result = api.suspend(handle);
+      if (result['ok'] != true) {
+        actionError = result['error']?.toString() ??
+            'Failed to restore automatic fan control';
+        notifyListeners();
+        return false;
+      }
+    } catch (e) {
+      actionError = 'Failed to restore automatic fan control: $e';
+      notifyListeners();
+      return false;
+    }
     _timer?.cancel();
     _debounce?.cancel();
-    try {
-      // Fans back to firmware control, but keep the saved profile for next run.
-      api.suspend(handle);
-    } catch (_) {
-      // The process is going away; nothing else to do.
-    }
+    return true;
   }
 
   @override
   void dispose() {
-    prepareExit();
+    _timer?.cancel();
+    _debounce?.cancel();
     try {
       api.destroy(handle);
     } catch (_) {}

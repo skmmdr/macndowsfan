@@ -11,6 +11,7 @@ class GlassCard extends StatefulWidget {
     this.hoverable = false,
     this.highlight = false,
     this.gradient,
+    this.borderColor,
   });
 
   final Widget child;
@@ -19,6 +20,7 @@ class GlassCard extends StatefulWidget {
   final bool hoverable;
   final bool highlight;
   final Gradient? gradient;
+  final Color? borderColor;
 
   @override
   State<GlassCard> createState() => _GlassCardState();
@@ -33,28 +35,16 @@ class _GlassCardState extends State<GlassCard> {
         ? AppColors.accent.withValues(alpha: 0.55)
         : _hover && widget.hoverable
             ? AppColors.accent.withValues(alpha: 0.30)
-            : AppColors.border;
+            : widget.borderColor ?? AppColors.border;
 
     final content = AnimatedContainer(
       duration: const Duration(milliseconds: 180),
       curve: Curves.easeOut,
       padding: widget.padding,
       decoration: BoxDecoration(
-        gradient: widget.gradient ??
-            const LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [Color(0xFF151D29), Color(0xFF10161F)],
-            ),
+        gradient: widget.gradient ?? AppColors.tileGradient,
         borderRadius: BorderRadius.circular(widget.radius),
         border: Border.all(color: borderColor),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.28),
-            blurRadius: 26,
-            offset: const Offset(0, 12),
-          ),
-        ],
       ),
       child: widget.child,
     );

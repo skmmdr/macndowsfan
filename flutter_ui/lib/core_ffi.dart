@@ -56,7 +56,7 @@ class CoreApi {
 
   void destroy(Pointer<Void> handle) => _destroy(handle);
 
-  String version() => _take(_version())['version']?.toString() ?? '0.1.0';
+  String version() => _take(_version())['version']?.toString() ?? '0.3.0';
 
   Map<String, dynamic> sample(Pointer<Void> handle) => _take(_sample(handle));
 

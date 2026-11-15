@@ -32,6 +32,12 @@ extension FanProfileX on FanProfile {
         FanProfile.custom => 'Your own settings',
       };
 
+  String? get requiredSensor => switch (this) {
+        FanProfile.quiet || FanProfile.balanced => 'TC0P',
+        FanProfile.gaming => 'TG0d',
+        _ => null,
+      };
+
   static FanProfile fromId(String? id) => switch (id) {
         'automatic' => FanProfile.automatic,
         'quiet' => FanProfile.quiet,
@@ -89,14 +95,14 @@ class FanReading {
 
   double get fraction {
     final span = maxRpm - minRpm;
-    if (span <= 0) return 0;
+    if (!actual.isFinite || !span.isFinite || span <= 0) return 0;
     return ((actual - minRpm) / span).clamp(0.0, 1.0).toDouble();
   }
 
   factory FanReading.fromJson(Map<String, dynamic> j) => FanReading(
         index: (j['index'] as num?)?.toInt() ?? 0,
         name: j['name']?.toString() ?? 'Fan',
-        actual: (j['actual'] as num?)?.toDouble() ?? 0,
+        actual: (j['actual'] as num?)?.toDouble() ?? double.nan,
         target: (j['target'] as num?)?.toDouble(),
         minRpm: (j['minRpm'] as num?)?.toDouble() ?? 0,
         maxRpm: (j['maxRpm'] as num?)?.toDouble() ?? 0,
@@ -267,7 +273,8 @@ double sensorTarget(
 ) {
   final lo = minRpm <= 0 ? 800.0 : minRpm;
   final hi = maxRpm > lo ? maxRpm : lo;
-  if (temp == null || !temp.isFinite || temp <= start) return lo;
+  if (temp == null || !temp.isFinite) return hi;
+  if (temp <= start) return lo;
   if (temp >= max || max - start <= 0.1) return hi;
   final t = ((temp - start) / (max - start)).clamp(0.0, 1.0).toDouble();
   return lo + (hi - lo) * t;

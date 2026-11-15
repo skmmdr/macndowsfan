@@ -31,7 +31,7 @@ pub struct FanDesc {
     pub mn: [u8; 4],
     pub mx: [u8; 4],
     pub tg: Option<[u8; 4]>,
-    pub ac_info: KeyInfo,
+    pub ac_info: Option<KeyInfo>,
     pub tg_info: Option<KeyInfo>,
     pub mode_key: Option<([u8; 4], KeyInfo)>,
     pub shared_mode: bool,
@@ -41,7 +41,13 @@ pub struct FanDesc {
 
 impl FanDesc {
     pub fn controllable(&self) -> bool {
-        self.tg.is_some() && self.tg_info.is_some()
+        self.ac_info.is_some()
+            && self.tg.is_some()
+            && self.tg_info.map_or(false, |info| {
+                (info.is_fpe2() && info.size == 2 && self.max_rpm <= u16::MAX as f32 / 4.0)
+                    || (info.is_float() && info.size == 4)
+            })
+            && valid_fan_limits(self.min_rpm, self.max_rpm)
     }
 }
 
@@ -85,7 +91,7 @@ pub struct Machine {
     pub fs_key: Option<([u8; 4], KeyInfo)>,
     pub key_count: Option<u32>,
     last_applied: Vec<Option<(bool, f32)>>,
-    curve_temp: Option<(String, f32)>,
+    curve_temps: Vec<Option<(String, f32)>>,
 }
 
 fn key(s: &str) -> [u8; 4] {
@@ -106,7 +112,10 @@ fn read_number(smc: &Smc, k: &[u8; 4]) -> Option<f32> {
 
 pub fn sensor_curve(temp: f32, start: f32, max: f32, min_rpm: f32, max_rpm: f32) -> f32 {
     let (min_rpm, max_rpm) = (min_rpm.min(max_rpm), min_rpm.max(max_rpm));
-    if !temp.is_finite() || temp <= start {
+    if !temp.is_finite() {
+        return max_rpm;
+    }
+    if temp <= start {
         return min_rpm;
     }
     if temp >= max || (max - start) <= 0.1 {
@@ -140,10 +149,9 @@ impl Machine {
         let mut fans = Vec::new();
         for i in 0..fan_count {
             let ac = key(&format!("F{i}Ac"));
-            let ac_info = match smc.key_info(&ac) {
-                Ok(info) => info,
-                Err(_) => continue,
-            };
+            // Keep every counted fan even when speed discovery fails: its
+            // forced mode still needs to be restored and verified on exit.
+            let ac_info = smc.key_info(&ac).ok();
             let mn = key(&format!("F{i}Mn"));
             let mx = key(&format!("F{i}Mx"));
             let tg = key(&format!("F{i}Tg"));
@@ -152,9 +160,10 @@ impl Machine {
             let tg_info = smc.key_info(&tg).ok();
             let tg = if tg_info.is_some() { Some(tg) } else { None };
 
-            // Per-fan mode key, falling back to the first fan's key on models
-            // where a single mode key drives synchronized fans.
-            let mut shared_mode = false;
+            // A missing per-fan key might be a transient read failure, not
+            // evidence that this fan shares F0Md. Never claim restoration
+            // until every counted fan's mode can be verified.
+            let shared_mode = false;
             let mut mode_key = None;
             if mode_style == ModeStyle::PerFan {
                 if let Ok(info) = smc.key_info(&key(&format!("F{i}Md"))) {
@@ -162,21 +171,13 @@ impl Machine {
                         mode_key = Some((key(&format!("F{i}Md")), info));
                     }
                 }
-                if mode_key.is_none() {
-                    if let Some(info) = f0md_info.clone() {
-                        mode_key = Some((key("F0Md"), info));
-                        shared_mode = true;
-                    }
-                }
             }
 
             let name = read_fan_name(&smc, &id).unwrap_or_else(|| format!("Fan {}", i + 1));
 
-            let min_rpm = read_number(&smc, &mn).unwrap_or(0.0).max(0.0);
-            let mut max_rpm = read_number(&smc, &mx).unwrap_or(0.0).max(0.0);
-            if max_rpm <= min_rpm {
-                max_rpm = (min_rpm + 2000.0).max(3000.0);
-            }
+            // Zero means unavailable, not an inferred hardware limit.
+            let min_rpm = read_number(&smc, &mn).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(0.0);
+            let max_rpm = read_number(&smc, &mx).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(0.0);
 
             fans.push(FanDesc {
                 index: i,
@@ -211,7 +212,7 @@ impl Machine {
             fs_key: fs_info.map(|info| (key("FS! "), info)),
             key_count,
             last_applied: vec![None; n],
-            curve_temp: None,
+            curve_temps: vec![None; n],
         })
     }
 
@@ -245,8 +246,11 @@ impl Machine {
                 min_rpm: fan.min_rpm,
                 max_rpm: fan.max_rpm,
                 forced: self.is_forced(fan).unwrap_or(false),
-                controllable: fan.controllable(),
-                value_type: fan.ac_info.type_str(),
+                controllable: fan.controllable() && match self.mode_style {
+                    ModeStyle::PerFan => fan.mode_key.is_some(),
+                    ModeStyle::Bitmask => self.fs_key.is_some(),
+                },
+                value_type: fan.ac_info.map(|info| info.type_str()).unwrap_or_else(|| "unknown".to_string()),
                 mode_key: fan
                     .mode_key
                     .map(|(k, _)| key_to_string(&k))
@@ -271,57 +275,46 @@ impl Machine {
         snap
     }
 
-    fn mode_value(&self, fan: &FanDesc) -> Option<u8> {
+    fn read_forced(&self, fan: &FanDesc) -> Result<bool> {
         match self.mode_style {
             ModeStyle::PerFan => {
-                let (k, info) = fan.mode_key?;
-                let data = self.smc.read_key(&k, info.size).ok()?;
-                data.first().copied()
+                let (k, info) = fan.mode_key.ok_or_else(|| SmcError::msg("fan has no mode key"))?;
+                let data = self.smc.read_key(&k, info.size)?;
+                data.first().map(|v| *v != 0)
+                    .ok_or_else(|| SmcError::msg("fan mode read returned no data"))
             }
             ModeStyle::Bitmask => {
-                let (k, info) = self.fs_key?;
-                let data = self.smc.read_key(&k, info.size).ok()?;
-                let bits = if data.len() >= 2 {
-                    u16::from_be_bytes([data[0], data[1]])
-                } else {
-                    data.first().copied().unwrap_or(0) as u16
-                };
-                Some(((bits >> fan.index) & 1) as u8)
+                let (k, info) = self.fs_key.ok_or_else(|| SmcError::msg("fan mode bitmask is unavailable"))?;
+                let data = self.smc.read_key(&k, info.size)?;
+                if data.len() != info.size as usize {
+                    return Err(SmcError::msg("fan mode bitmask read was incomplete"));
+                }
+                let bits = data.iter().fold(0u32, |bits, byte| (bits << 8) | u32::from(*byte));
+                Ok((bits & (1u32 << fan.index)) != 0)
             }
         }
     }
 
     pub fn is_forced(&self, fan: &FanDesc) -> Option<bool> {
-        self.mode_value(fan).map(|v| v != 0)
+        self.read_forced(fan).ok()
     }
 
     fn set_forced(&mut self, fan: &FanDesc, forced: bool) -> Result<()> {
         match self.mode_style {
             ModeStyle::PerFan => {
-                if let Some((k, _info)) = fan.mode_key {
-                    self.smc.write_key(&k, &[u8::from(forced)])?;
-                }
+                let (k, _) = fan.mode_key.ok_or_else(|| SmcError::msg("fan has no mode key"))?;
+                self.smc.write_key(&k, &[u8::from(forced)])?;
             }
             ModeStyle::Bitmask => {
-                if let Some((k, info)) = self.fs_key {
-                    let data = self.smc.read_key(&k, info.size).unwrap_or_default();
-                    let mut bits = if data.len() >= 2 {
-                        u16::from_be_bytes([data[0], data[1]])
-                    } else {
-                        0
-                    };
-                    if forced {
-                        bits |= 1 << fan.index;
-                    } else {
-                        bits &= !(1 << fan.index);
-                    }
-                    let bytes = if info.size >= 2 || data.len() >= 2 {
-                        bits.to_be_bytes().to_vec()
-                    } else {
-                        vec![bits as u8]
-                    };
-                    self.smc.write_key(&k, &bytes)?;
+                let (k, info) = self.fs_key.ok_or_else(|| SmcError::msg("fan mode bitmask is unavailable"))?;
+                let mut data = self.smc.read_key(&k, info.size)?;
+                if data.len() != info.size as usize {
+                    return Err(SmcError::msg("fan mode bitmask read was incomplete"));
                 }
+                let byte = data.len() - 1 - fan.index / 8;
+                let mask = 1u8 << (fan.index % 8);
+                if forced { data[byte] |= mask; } else { data[byte] &= !mask; }
+                self.smc.write_key(&k, &data)?;
             }
         }
         Ok(())
@@ -343,31 +336,51 @@ impl Machine {
         temps: &HashMap<String, f32>,
     ) -> Result<Vec<String>> {
         let mut actions = Vec::new();
+        let current_count = detect_fan_count(&self.smc)?;
+        if current_count != self.fans.len() {
+            return Err(SmcError::msg("SMC fan count changed; cannot verify all fan modes"));
+        }
+        validate_shared_modes(&self.fans, settings)?;
 
         for i in 0..self.fans.len() {
             let fan = self.fans[i].clone();
             let s = settings.fan_or_default(fan.index);
+            let shares_mode = fan.mode_key.map_or(false, |(key, _)| {
+                self.fans.iter().enumerate().any(|(other_index, other)| {
+                    other_index != i && other.mode_key.map(|(other_key, _)| other_key) == Some(key)
+                })
+            });
             if s.mode != ControlMode::Sensor {
-                self.curve_temp = None;
+                self.curve_temps[i] = None;
             }
-            let forced_now = self.is_forced(&fan).unwrap_or(false);
+            let forced_now = self.read_forced(&fan)?;
 
-            if s.mode == ControlMode::Automatic || !fan.controllable() {
+            if s.mode == ControlMode::Automatic {
                 if forced_now {
                     self.set_forced(&fan, false)?;
-                    self.last_applied[fan.index] = None;
+                    if self.read_forced(&fan)? {
+                        return Err(SmcError::msg(format!("{} remains in forced mode", fan.name)));
+                    }
+                    self.last_applied[i] = None;
                     actions.push(format!("{}: automatic", fan.name));
                 } else {
-                    self.last_applied[fan.index] = Some((false, 0.0));
+                    self.last_applied[i] = Some((false, 0.0));
                 }
                 continue;
             }
+            if !fan.controllable() {
+                return Err(SmcError::msg(format!(
+                    "{} cannot be forced: fan speed, a supported target key, or valid SMC speed limits are unavailable",
+                    fan.name
+                )));
+            }
 
+            let sensor_missing = s.mode == ControlMode::Sensor && !temps.get(&s.sensor).map_or(false, |v| v.is_finite());
             let rpm = match s.mode {
                 ControlMode::Constant => clamp_rpm(s.rpm, fan.min_rpm, fan.max_rpm),
                 ControlMode::Sensor => {
                     let raw = temps.get(&s.sensor).copied().unwrap_or(f32::NAN);
-                    let temp = self.smooth_curve_temp(&s.sensor, raw);
+                    let temp = smooth_curve_temp(&mut self.curve_temps[i], &s.sensor, raw);
                     sensor_curve(
                         temp,
                         s.start_temp,
@@ -381,49 +394,80 @@ impl Machine {
 
             if !forced_now {
                 self.set_forced(&fan, true)?;
+                match self.read_forced(&fan) {
+                    Ok(true) => {}
+                    Ok(false) => return Err(SmcError::msg(format!("{} did not enter forced mode", fan.name))),
+                    Err(e) => {
+                        if let Err(restore_error) = self.set_forced(&fan, false) {
+                            return Err(SmcError::msg(format!("{e}; also failed to restore automatic: {restore_error}")));
+                        }
+                        return Err(e);
+                    }
+                }
             }
-
-            let should_write = match self.last_applied[fan.index] {
-                Some((was_forced, last_rpm)) => !was_forced || (last_rpm - rpm).abs() > 30.0,
-                None => true,
+            // Compare against the SMC target, not only our cache. A driver or
+            // firmware change can leave forced mode set but alter the target.
+            let observed_target = if forced_now {
+                let (tg, info) = match (fan.tg, fan.tg_info) {
+                    (Some(tg), Some(info)) => (tg, info),
+                    _ => return Err(SmcError::msg("fan target key is unavailable")),
+                };
+                let data = self.smc.read_key(&tg, info.size)?;
+                if data.len() != info.size as usize {
+                    return Err(SmcError::msg(format!("{} target read was incomplete", fan.name)));
+                }
+                Some(decode_value(&info, &data)
+                    .filter(|v| v.is_finite())
+                    .ok_or_else(|| SmcError::msg(format!("{} target read failed", fan.name)))?)
+            } else {
+                None
             };
+            let should_write = shares_mode
+                || target_needs_write(self.last_applied[i], forced_now, rpm, observed_target)
+                || (sensor_missing && self.last_applied[i].map_or(true, |(_, last)| last < rpm));
             if should_write {
-                self.write_target(&fan, rpm)?;
+                if let Err(e) = self.write_target(&fan, rpm) {
+                    if !forced_now {
+                        if let Err(restore_error) = self.set_forced(&fan, false) {
+                            return Err(SmcError::msg(format!("{e}; also failed to restore automatic: {restore_error}")));
+                        }
+                    }
+                    return Err(e);
+                }
+                self.last_applied[i] = Some((true, rpm));
                 actions.push(format!("{}: {:.0} RPM", fan.name, rpm));
             }
-            self.last_applied[fan.index] = Some((true, rpm));
         }
 
         Ok(actions)
     }
 
-    /// Smooth the control sensor so fan target does not chase SMC noise.
-    fn smooth_curve_temp(&mut self, key: &str, raw: f32) -> f32 {
-        if !raw.is_finite() {
-            return raw;
-        }
-        if let Some((previous_key, previous)) = self.curve_temp.take() {
-            if previous_key == key {
-                let smoothed = previous * 0.7 + raw * 0.3;
-                self.curve_temp = Some((previous_key, smoothed));
-                return smoothed;
-            }
-        }
-        self.curve_temp = Some((key.to_string(), raw));
-        raw
-    }
-
-    pub fn restore_auto(&mut self) {
+    pub fn restore_auto(&mut self) -> Result<()> {
+        // Still attempt all known fans if the count cannot be verified, but
+        // never report successful restoration while other fans may be missing.
+        let mut first_error = match detect_fan_count(&self.smc) {
+            Ok(count) if count == self.fans.len() => None,
+            Ok(_) => Some(SmcError::msg("SMC fan count changed; cannot verify all fan modes")),
+            Err(e) => Some(e),
+        };
         for i in 0..self.fans.len() {
             let fan = self.fans[i].clone();
-            if self.is_forced(&fan).unwrap_or(false) {
-                let _ = self.set_forced(&fan, false);
+            // Attempt every fan even if an earlier one failed. Never infer
+            // automatic mode from an unreadable mode key.
+            let result = self.set_forced(&fan, false).and_then(|()| {
+                if self.read_forced(&fan)? {
+                    Err(SmcError::msg(format!("{} remains in forced mode", fan.name)))
+                } else {
+                    Ok(())
+                }
+            });
+            if let Err(e) = result {
+                if first_error.is_none() { first_error = Some(e); }
             }
+            self.last_applied[i] = None;
         }
-        for slot in &mut self.last_applied {
-            *slot = None;
-        }
-        self.curve_temp = None;
+        self.curve_temps.fill(None);
+        match first_error { Some(e) => Err(e), None => Ok(()) }
     }
 
     pub fn diagnostics(&self) -> Vec<String> {
@@ -445,7 +489,7 @@ impl Machine {
                     .as_ref()
                     .map(|i| format!(" ({})", i.type_str()))
                     .unwrap_or_default(),
-                f.ac_info.type_str(),
+                f.ac_info.map(|info| info.type_str()).unwrap_or_else(|| "unknown".to_string()),
                 f.min_rpm,
                 f.max_rpm,
                 f.mode_key
@@ -468,6 +512,56 @@ impl Machine {
     }
 }
 
+/// Fans sharing a mode key cannot independently use automatic and forced modes.
+fn validate_shared_modes(fans: &[FanDesc], settings: &Settings) -> Result<()> {
+    for (i, fan) in fans.iter().enumerate() {
+        let Some((key, _)) = fan.mode_key else { continue };
+        let forced = settings.fan_or_default(fan.index).mode != ControlMode::Automatic
+            && fan.controllable();
+        for other in &fans[..i] {
+            if other.mode_key.map(|(other_key, _)| other_key) == Some(key) {
+                let other_forced = settings.fan_or_default(other.index).mode != ControlMode::Automatic
+                    && other.controllable();
+                if forced != other_forced {
+                    return Err(SmcError::msg(format!(
+                        "{} and {} share a mode key and must both be automatic or both forced",
+                        fan.name, other.name
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Smooth each fan's control sensor independently.
+fn smooth_curve_temp(previous: &mut Option<(String, f32)>, key: &str, raw: f32) -> f32 {
+    if !raw.is_finite() {
+        *previous = None;
+        return raw;
+    }
+    let smoothed = match previous.as_ref() {
+        Some((previous_key, value)) if previous_key == key => *value * 0.7 + raw * 0.3,
+        _ => raw,
+    };
+    *previous = Some((key.to_string(), smoothed));
+    smoothed
+}
+
+fn valid_fan_limits(min: f32, max: f32) -> bool {
+    min.is_finite() && max.is_finite() && min > 0.0 && max > min
+}
+
+fn target_needs_write(last: Option<(bool, f32)>, forced_now: bool, rpm: f32, observed: Option<f32>) -> bool {
+    !forced_now || match last {
+        Some((was_forced, last_rpm)) => {
+            !was_forced || (last_rpm - rpm).abs() > 30.0
+                || observed.map_or(true, |current| !current.is_finite() || (current - last_rpm).abs() > 1.0)
+        }
+        None => true,
+    }
+}
+
 fn clamp_rpm(rpm: f32, min: f32, max: f32) -> f32 {
     if !rpm.is_finite() {
         return safe_min_rpm(min);
@@ -487,33 +581,117 @@ pub fn safe_min_rpm(min: f32) -> f32 {
     }
 }
 
+fn parse_fan_count(data: &[u8]) -> Result<usize> {
+    let n = match data {
+        [n] => *n as usize,
+        [hi, lo] => u16::from_be_bytes([*hi, *lo]) as usize,
+        [a, b, c, d] => u32::from_be_bytes([*a, *b, *c, *d]) as usize,
+        _ => return Err(SmcError::msg("invalid FNum length; cannot verify all fan modes")),
+    };
+    if (1..=10).contains(&n) {
+        Ok(n)
+    } else {
+        Err(SmcError::msg("invalid FNum value; cannot verify all fan modes"))
+    }
+}
+
 fn detect_fan_count(smc: &Smc) -> Result<usize> {
-    if let Ok((_info, data)) = smc.read_auto(&key("FNum")) {
-        if !data.is_empty() {
-            let n = match data.len() {
-                1 => data[0] as usize,
-                n if n >= 4 => u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize,
-                _ => data[data.len() - 1] as usize,
-            };
-            if (1..=10).contains(&n) {
-                return Ok(n);
-            }
-        }
+    let (info, data) = smc.read_auto(&key("FNum"))
+        .map_err(|e| SmcError::msg(format!("cannot read FNum; cannot verify all fan modes: {e}")))?;
+    if data.len() != info.size as usize {
+        return Err(SmcError::msg("incomplete FNum read; cannot verify all fan modes"));
+    }
+    parse_fan_count(&data)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_fan_count, sensor_curve, smooth_curve_temp, target_needs_write, valid_fan_limits, validate_shared_modes, FanDesc};
+    use crate::config::{ControlMode, Settings};
+    use crate::smc::KeyInfo;
+
+    #[test]
+    fn unavailable_sensor_uses_maximum_speed() {
+        assert_eq!(sensor_curve(f32::NAN, 55.0, 85.0, 1200.0, 2640.0), 2640.0);
+        assert_eq!(sensor_curve(f32::INFINITY, 55.0, 85.0, 1200.0, 2640.0), 2640.0);
+        assert_eq!(sensor_curve(50.0, 55.0, 85.0, 1200.0, 2640.0), 1200.0);
+        assert_eq!(sensor_curve(85.0, 55.0, 85.0, 1200.0, 2640.0), 2640.0);
     }
 
-    // Fallback: probe F0..F9 actual-speed keys.
-    let mut count = 0;
-    for i in 0..10 {
-        if smc.key_info(&key(&format!("F{i}Ac"))).is_ok() {
-            count = i + 1;
-        } else if i > 0 {
-            break;
-        }
+    #[test]
+    fn sensor_smoothing_is_independent_per_fan_and_resets() {
+        let mut first = None;
+        let mut second = None;
+        assert_eq!(smooth_curve_temp(&mut first, "TC0P", 50.0), 50.0);
+        assert_eq!(smooth_curve_temp(&mut second, "TG0d", 80.0), 80.0);
+        assert!((smooth_curve_temp(&mut first, "TC0P", 60.0) - 53.0).abs() < 0.001);
+        assert!((smooth_curve_temp(&mut second, "TG0d", 90.0) - 83.0).abs() < 0.001);
+        assert!(smooth_curve_temp(&mut first, "TC0P", f32::NAN).is_nan());
+        assert_eq!(smooth_curve_temp(&mut first, "TC0P", 70.0), 70.0);
     }
-    if count == 0 {
-        Err(SmcError::msg("unable to determine fan count (FNum/F0Ac missing)"))
-    } else {
-        Ok(count)
+
+    #[test]
+    fn shared_mode_rejects_mixed_automatic_and_forced() {
+        let info = KeyInfo { size: 1, ty: *b"ui8 ", attrs: 0 };
+        let target_info = KeyInfo { size: 2, ty: *b"fpe2", attrs: 0 };
+        let fan = |index| FanDesc {
+            index,
+            name: format!("Fan {index}"),
+            ac: *b"F0Ac", mn: *b"F0Mn", mx: *b"F0Mx",
+            tg: Some(*b"F0Tg"), ac_info: Some(info), tg_info: Some(target_info),
+            mode_key: Some((*b"F0Md", info)), shared_mode: index != 0,
+            min_rpm: 1200.0, max_rpm: 2640.0,
+        };
+        let fans = [fan(0), fan(1)];
+        let mut settings = Settings::default();
+        settings.fan(0).mode = ControlMode::Constant;
+        assert!(validate_shared_modes(&fans, &settings).is_err());
+        settings.fan(1).mode = ControlMode::Sensor;
+        assert!(validate_shared_modes(&fans, &settings).is_ok());
+        settings.fan(0).mode = ControlMode::Automatic;
+        settings.fan(1).mode = ControlMode::Automatic;
+        assert!(validate_shared_modes(&fans, &settings).is_ok());
+        let mut missing_speed = fan(0);
+        missing_speed.ac_info = None;
+        assert!(!missing_speed.controllable());
+        let mut missing_limits = fan(0);
+        missing_limits.max_rpm = 0.0;
+        assert!(!missing_limits.controllable());
+        let mut unsupported_target = fan(0);
+        unsupported_target.tg_info = Some(info);
+        assert!(!unsupported_target.controllable());
+        let mut unrepresentable_target = fan(0);
+        unrepresentable_target.max_rpm = 17000.0;
+        assert!(!unrepresentable_target.controllable());
+        assert!(fan(0).controllable());
+    }
+
+    #[test]
+    fn requires_known_fan_count_and_reported_limits() {
+        assert!(matches!(parse_fan_count(&[2]), Ok(2)));
+        assert!(matches!(parse_fan_count(&[0, 2]), Ok(2)));
+        assert!(matches!(parse_fan_count(&[0, 0, 0, 2]), Ok(2)));
+        for invalid in [&[][..], &[0][..], &[11][..], &[0, 0, 1, 0][..], &[1, 2, 3][..]] {
+            assert!(parse_fan_count(invalid).is_err());
+        }
+        assert!(valid_fan_limits(1200.0, 2640.0));
+        assert!(!valid_fan_limits(0.0, 2640.0));
+        assert!(!valid_fan_limits(1200.0, 0.0));
+        assert!(!valid_fan_limits(1200.0, 1200.0));
+        assert!(!valid_fan_limits(f32::NAN, 2640.0));
+    }
+
+    #[test]
+    fn deadband_is_relative_to_last_written_target() {
+        let last_written = Some((true, 1200.0));
+        assert!(!target_needs_write(last_written, true, 1215.0, Some(1200.0)));
+        assert!(!target_needs_write(last_written, true, 1230.0, Some(1200.0)));
+        assert!(target_needs_write(last_written, true, 1231.0, Some(1200.0)));
+        assert!(target_needs_write(last_written, false, 1200.0, None));
+        assert!(target_needs_write(last_written, true, 1200.0, Some(1400.0)));
+        assert!(target_needs_write(last_written, true, 1200.0, None));
+        assert!(target_needs_write(last_written, true, 1200.0, Some(f32::NAN)));
+        assert!(!target_needs_write(last_written, true, 1200.0, Some(1200.25)));
     }
 }
 

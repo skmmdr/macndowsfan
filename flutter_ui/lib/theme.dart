@@ -1,18 +1,30 @@
 import 'package:flutter/material.dart';
 
 abstract final class AppColors {
-  static const bg = Color(0xFF080B11);
-  static const bg2 = Color(0xFF0D131D);
-  static const card = Color(0xFF131A25);
-  static const card2 = Color(0xFF18202D);
-  static const border = Color(0xFF222C3C);
-  static const text = Color(0xFFE9EEF7);
-  static const muted = Color(0xFF8B97A9);
-  static const accent = Color(0xFF5BC8FF);
-  static const accent2 = Color(0xFF8B7CFF);
-  static const green = Color(0xFF4ADE80);
-  static const amber = Color(0xFFFBBF24);
-  static const red = Color(0xFFF87171);
+  static const bg = Color(0xFF0B100E);
+  static const bg2 = Color(0xFF121815);
+  static const card = Color(0xFF1A2320);
+  static const card2 = Color(0xFF232E29);
+  static const border = Color(0xFF2F3D36);
+  static const text = Color(0xFFF1F5EC);
+  static const muted = Color(0xFF9BAE9F);
+  static const accent = Color(0xFFB7E88A);
+  static const accent2 = Color(0xFF84C7BB);
+  static const green = Color(0xFFA6DE9C);
+  static const amber = Color(0xFFF0C77A);
+  static const red = Color(0xFFFF9A8D);
+
+  static const heroGradient = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [Color(0xFF26332C), Color(0xFF161E1B)],
+  );
+
+  static const tileGradient = LinearGradient(
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
+    colors: [Color(0xFF202A25), Color(0xFF171F1C)],
+  );
 }
 
 Color tempColor(double? value) {
@@ -25,7 +37,7 @@ Color tempColor(double? value) {
 ThemeData buildTheme() {
   const scheme = ColorScheme.dark(
     primary: AppColors.accent,
-    onPrimary: Color(0xFF04121A),
+    onPrimary: Color(0xFF16210F),
     secondary: AppColors.accent2,
     onSecondary: Colors.white,
     surface: AppColors.card,
@@ -55,7 +67,7 @@ ThemeData buildTheme() {
     dividerColor: AppColors.border,
     tooltipTheme: TooltipThemeData(
       decoration: BoxDecoration(
-        color: const Color(0xFF1E2836),
+        color: AppColors.card2,
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: AppColors.border),
       ),
@@ -65,10 +77,10 @@ ThemeData buildTheme() {
     sliderTheme: base.sliderTheme.copyWith(
       trackHeight: 6,
       activeTrackColor: AppColors.accent,
-      inactiveTrackColor: const Color(0xFF223041),
+      inactiveTrackColor: AppColors.border,
       thumbColor: Colors.white,
       overlayColor: AppColors.accent.withValues(alpha: 0.15),
-      valueIndicatorColor: const Color(0xFF1E2836),
+      valueIndicatorColor: AppColors.card2,
       valueIndicatorTextStyle: const TextStyle(
         color: AppColors.text,
         fontSize: 12,

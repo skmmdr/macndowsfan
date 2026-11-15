@@ -16,11 +16,12 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-const GREEN: egui::Color32 = egui::Color32::from_rgb(88, 200, 130);
-const ORANGE: egui::Color32 = egui::Color32::from_rgb(232, 168, 72);
-const RED: egui::Color32 = egui::Color32::from_rgb(232, 96, 92);
-const MUTED: egui::Color32 = egui::Color32::from_rgb(150, 156, 168);
-const ACCENT: egui::Color32 = egui::Color32::from_rgb(120, 170, 255);
+const GREEN: egui::Color32 = egui::Color32::from_rgb(168, 223, 158);
+const ORANGE: egui::Color32 = egui::Color32::from_rgb(242, 200, 121);
+const RED: egui::Color32 = egui::Color32::from_rgb(255, 152, 140);
+const MUTED: egui::Color32 = egui::Color32::from_rgb(167, 185, 173);
+const ACCENT: egui::Color32 = egui::Color32::from_rgb(185, 235, 137);
+const CARD: egui::Color32 = egui::Color32::from_rgb(32, 42, 39);
 
 pub struct FanApp {
     shared: Arc<Shared>,
@@ -55,15 +56,11 @@ impl FanApp {
             return;
         }
         let mut added = false;
-        while self.settings.fans.len() < snap.fans.len() {
-            let i = self.settings.fans.len();
-            let f = &snap.fans[i];
-            let rpm = (0.5 * (f.min_rpm + f.max_rpm)).round();
-            self.settings.fans.push(FanSetting {
-                rpm,
-                ..Default::default()
-            });
-            added = true;
+        for f in &snap.fans {
+            while self.settings.fans.len() <= f.index {
+                self.settings.fans.push(FanSetting::default());
+                added = true;
+            }
         }
         if added {
             *self.shared.settings.lock().unwrap() = self.settings.clone();
@@ -159,11 +156,12 @@ fn configure_style(ctx: &egui::Context) {
     ctx.set_theme(egui::ThemePreference::Dark);
     ctx.all_styles_mut(|style| {
         style.visuals = egui::Visuals::dark();
-        style.visuals.panel_fill = egui::Color32::from_rgb(22, 23, 27);
-        style.visuals.window_fill = egui::Color32::from_rgb(28, 30, 35);
-        style.visuals.override_text_color = Some(egui::Color32::from_rgb(226, 229, 235));
-        style.spacing.item_spacing = egui::vec2(8.0, 6.0);
-        style.spacing.button_padding = egui::vec2(10.0, 5.0);
+        style.visuals.panel_fill = egui::Color32::from_rgb(16, 21, 20);
+        style.visuals.window_fill = CARD;
+        style.visuals.extreme_bg_color = egui::Color32::from_rgb(21, 28, 26);
+        style.visuals.override_text_color = Some(egui::Color32::from_rgb(242, 246, 237));
+        style.spacing.item_spacing = egui::vec2(10.0, 8.0);
+        style.spacing.button_padding = egui::vec2(12.0, 7.0);
     });
 }
 
@@ -300,7 +298,11 @@ fn fan_card(ui: &mut egui::Ui, fan: &FanReading, s: &mut FanSetting, snap: &Snap
     let lo = crate::machine::safe_min_rpm(fan.min_rpm);
     let hi = fan.max_rpm.max(lo + 1.0);
 
-    egui::Frame::group(ui.style()).show(ui, |ui| {
+    egui::Frame::group(ui.style())
+        .fill(CARD)
+        .corner_radius(16)
+        .inner_margin(egui::Margin::same(16))
+        .show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new(fan.name.as_str()).size(17.0).strong());
@@ -328,8 +330,10 @@ fn fan_card(ui: &mut egui::Ui, fan: &FanReading, s: &mut FanSetting, snap: &Snap
                     .selected_text(s.mode.label())
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut s.mode, ControlMode::Automatic, "Automatic");
-                        ui.selectable_value(&mut s.mode, ControlMode::Constant, "Constant speed");
-                        ui.selectable_value(&mut s.mode, ControlMode::Sensor, "Sensor-based");
+                        ui.add_enabled_ui(fan.controllable, |ui| {
+                            ui.selectable_value(&mut s.mode, ControlMode::Constant, "Constant speed");
+                            ui.selectable_value(&mut s.mode, ControlMode::Sensor, "Sensor-based");
+                        });
                     });
                 ui.label(egui::RichText::new("Control").size(12.0).color(MUTED));
             });
@@ -337,7 +341,7 @@ fn fan_card(ui: &mut egui::Ui, fan: &FanReading, s: &mut FanSetting, snap: &Snap
 
         if !fan.controllable {
             ui.label(
-                egui::RichText::new("This fan exposes no target key (read-only).")
+                egui::RichText::new("Manual control unavailable: fan speed, target or valid SMC limits could not be verified.")
                     .size(12.0)
                     .color(ORANGE),
             );
@@ -486,18 +490,17 @@ fn temps_ui(ui: &mut egui::Ui, snap: &Snapshot) {
         return;
     }
 
-    egui::Frame::group(ui.style()).show(ui, |ui| {
-        egui::Grid::new("temps_grid")
-            .num_columns(4)
-            .spacing([26.0, 5.0])
-            .striped(true)
-            .show(ui, |ui| {
-                for (i, t) in snap.temps.iter().enumerate() {
-                    ui.label(
-                        egui::RichText::new(format!("{} ({})", t.label, t.key))
-                            .size(12.0)
-                            .color(MUTED),
-                    );
+    ui.horizontal_wrapped(|ui| {
+        for t in &snap.temps {
+            egui::Frame::group(ui.style())
+                .fill(CARD)
+                .corner_radius(14)
+                .inner_margin(egui::Margin::same(14))
+                .show(ui, |ui| {
+                    ui.set_min_width(155.0);
+                    ui.label(egui::RichText::new(&t.label).size(12.0).strong());
+                    ui.label(egui::RichText::new(&t.key).size(10.0).color(MUTED));
+                    ui.add_space(6.0);
                     match t.value {
                         Some(v) => {
                             let color = if v >= 80.0 {
@@ -507,22 +510,15 @@ fn temps_ui(ui: &mut egui::Ui, snap: &Snapshot) {
                             } else {
                                 GREEN
                             };
-                            ui.label(
-                                egui::RichText::new(format!("{v:.1} °C"))
-                                    .size(13.0)
-                                    .strong()
-                                    .color(color),
-                            );
+                            ui.label(egui::RichText::new(format!("{v:.1} °C"))
+                                .size(20.0).strong().color(color));
                         }
                         None => {
-                            ui.label(egui::RichText::new("—").size(13.0).color(MUTED));
+                            ui.label(egui::RichText::new("— °C").size(20.0).color(MUTED));
                         }
                     }
-                    if i % 2 == 1 {
-                        ui.end_row();
-                    }
-                }
-            });
+                });
+        }
     });
 }
 

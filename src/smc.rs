@@ -269,6 +269,9 @@ pub fn decode_value(info: &KeyInfo, data: &[u8]) -> Option<f32> {
     if &info.ty == b"sp87" && data.len() >= 2 {
         return Some(i16::from_be_bytes([data[0], data[1]]) as f32 / 128.0);
     }
+    if &info.ty == b"si16" && data.len() >= 2 {
+        return Some(i16::from_be_bytes([data[0], data[1]]) as f32);
+    }
     if &info.ty == b"ui16" && data.len() >= 2 {
         return Some(u16::from_be_bytes([data[0], data[1]]) as f32);
     }
@@ -276,6 +279,19 @@ pub fn decode_value(info: &KeyInfo, data: &[u8]) -> Option<f32> {
         return Some(data[0] as f32);
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{decode_value, KeyInfo};
+
+    #[test]
+    fn decodes_signed_integer_temperature() {
+        let info = KeyInfo { size: 2, ty: *b"si16", attrs: 0 };
+        assert_eq!(decode_value(&info, &42i16.to_be_bytes()), Some(42.0));
+        assert_eq!(decode_value(&info, &(-7i16).to_be_bytes()), Some(-7.0));
+        assert_eq!(decode_value(&info, &[0]), None);
+    }
 }
 
 pub fn encode_rpm(info: &KeyInfo, rpm: f32) -> Vec<u8> {

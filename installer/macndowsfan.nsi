@@ -1,10 +1,38 @@
 Unicode true
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
+!include "StrFunc.nsh"
+${StrStr}
+${UnStrStr}
+
+; Never force-kill the app: its tray Quit restores firmware fan control.
+!macro RequireAppClosed PHASE
+  ${Do}
+    nsExec::ExecToStack 'tasklist /FI "IMAGENAME eq ${APPEXE}" /NH'
+    Pop $0
+    Pop $1
+    ${If} $0 != 0
+      MessageBox MB_OK|MB_ICONSTOP "Could not check whether macndowsfan is running. Close it with Quit in its tray menu, then try again." /SD IDOK
+      SetErrorLevel 1
+      Abort
+    ${EndIf}
+    !if "${PHASE}" == "install"
+      ${StrStr} $2 $1 "${APPEXE}"
+    !else
+      ${UnStrStr} $2 $1 "${APPEXE}"
+    !endif
+    ${If} $2 == ""
+      ${ExitDo}
+    ${EndIf}
+    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "Quit macndowsfan using its tray menu to restore automatic fan control, then choose Retry." /SD IDCANCEL IDRETRY +3
+    SetErrorLevel 1
+    Abort
+  ${Loop}
+!macroend
 
 !define APPNAME "macndowsfan"
 !define APPEXE "macndowsfan.exe"
-!define APPVERSION "0.1.0"
+!define APPVERSION "0.3.0"
 !define PUBLISHER "macndowsfan"
 !define UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\macndowsfan"
 !define ROOT "${__FILEDIR__}\.."
@@ -47,16 +75,13 @@ Section "macndowsfan" SecMain
   SetShellVarContext all
   SetRegView 64
 
+  !insertmacro RequireAppClosed install
+
   ; Clean registry entries written by older 32-bit installer builds.
   SetRegView 32
   DeleteRegKey HKLM "${UNINSTKEY}"
   DeleteRegKey HKLM "Software\macndowsfan"
   SetRegView 64
-
-  ; Upgrade: close a running instance gracefully (WM_CLOSE restores fan control).
-  nsExec::ExecToLog 'taskkill /IM ${APPEXE}'
-  Sleep 1200
-  nsExec::ExecToLog 'taskkill /F /IM ${APPEXE}'
 
   SetOutPath "$INSTDIR"
   File /r /x "macndowsfan-setup-*.exe" "${ROOT}\dist\*.*"
@@ -119,16 +144,13 @@ SectionEnd
 Section "Uninstall"
   SetShellVarContext all
 
+  !insertmacro RequireAppClosed uninstall
+
   ; Remove both 32- and 64-bit registry views (old builds registered 32-bit).
   SetRegView 32
   DeleteRegKey HKLM "${UNINSTKEY}"
   DeleteRegKey HKLM "Software\macndowsfan"
   SetRegView 64
-
-  ; Graceful close first, then force.
-  nsExec::ExecToLog 'taskkill /IM ${APPEXE}'
-  Sleep 1500
-  nsExec::ExecToLog 'taskkill /F /IM ${APPEXE}'
 
   ; Remove the SMC service only if it was created against our local driver copy.
   ReadRegStr $0 HKLM "SYSTEM\CurrentControlSet\Services\AppleSMC" "ImagePath"

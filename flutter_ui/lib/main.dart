@@ -26,7 +26,7 @@ Future<void> main(List<String> args) async {
     size: Size(1180, 880),
     minimumSize: Size(900, 620),
     center: true,
-    backgroundColor: Color(0xFF080B11),
+    backgroundColor: Color(0xFF0B100E),
     title: 'macndowsfan',
     titleBarStyle: TitleBarStyle.normal,
   );
@@ -96,7 +96,10 @@ class _MacsFanAppState extends State<MacsFanApp> {
   }
 
   Future<AppExitResponse> _onExitRequested() async {
-    _controller?.prepareExit();
+    if (_controller != null && !_controller!.prepareExit()) {
+      await _tray?.showWindow();
+      return AppExitResponse.cancel;
+    }
     return AppExitResponse.exit;
   }
 

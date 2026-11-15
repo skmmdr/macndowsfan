@@ -138,8 +138,10 @@ fn selftest_main() {
                 }
             }
 
-            m.restore_auto();
-            out.push_str("restored automatic\n");
+            match m.restore_auto() {
+                Ok(()) => out.push_str("restored automatic\n"),
+                Err(e) => out.push_str(&format!("failed to restore automatic: {e}\n")),
+            }
             for i in 0..4 {
                 std::thread::sleep(std::time::Duration::from_secs(1));
                 let s = m.sample();
@@ -236,8 +238,10 @@ fn probe_main() {
                         ));
                     }
                     // Leave the machine in the safe state after a diagnostic run.
-                    m.restore_auto();
-                    out.push_str("\nfan modes restored to automatic\n");
+                    match m.restore_auto() {
+                        Ok(()) => out.push_str("\nfan modes restored to automatic\n"),
+                        Err(e) => out.push_str(&format!("\nfailed to restore automatic: {e}\n")),
+                    }
                 }
                 Err(e) => out.push_str(&format!("\nMachine open failed: {e}\n")),
             }

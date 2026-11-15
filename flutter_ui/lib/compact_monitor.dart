@@ -29,7 +29,7 @@ const compactSizes = <CompactSize>[
 /// instead of opening the device a second time (the driver is exclusive).
 ///
 /// Deliberately cheap to run: no charts, no animations, no timers of its own.
-/// It rebuilds once per snapshot (1 Hz) and paints a flat gradient, so an
+/// It rebuilds once per snapshot (1 Hz) and paints flat tiles, so an
 /// always-on-top widget costs far less than the dashboard it replaces.
 class CompactMonitor extends StatelessWidget {
   const CompactMonitor({
@@ -70,10 +70,8 @@ class CompactMonitor extends StatelessWidget {
         final setting = controller.fanSetting(index);
 
         final temps = snap.temps;
-        final key = sensorKey ??
-            (setting != null && temps.any((t) => t.key == setting.sensor)
-                ? setting.sensor
-                : (temps.isNotEmpty ? temps.first.key : null));
+        final key = sensorKey ?? setting?.sensor ??
+            (temps.isNotEmpty ? temps.first.key : null);
 
         TempReading? sensor;
         if (key != null) {
@@ -90,11 +88,7 @@ class CompactMonitor extends StatelessWidget {
           onPanStart: (_) => onStartDrag(),
           child: Container(
             decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [AppColors.bg2, AppColors.bg, Color(0xFF070A10)],
-              ),
+              color: AppColors.bg,
               border: Border.all(
                 color: AppColors.border.withValues(alpha: 0.9),
               ),
@@ -116,7 +110,18 @@ class CompactMonitor extends StatelessWidget {
                 SizedBox(height: 4 * scale),
                 _speedBar(fan, scale),
                 SizedBox(height: 4 * scale),
-                _bottomRow(temps, key, fans, setting, snap.ok, scale),
+                if (controller.actionError != null)
+                  Tooltip(
+                    message: controller.actionError!,
+                    child: Text(
+                      controller.actionError!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: AppColors.red, fontSize: 9 * scale),
+                    ),
+                  )
+                else
+                  _bottomRow(temps, key, fans, setting, snap.ok, scale),
               ],
             ),
           ),
@@ -132,26 +137,25 @@ class CompactMonitor extends StatelessWidget {
       child: Row(
         children: [
           Container(
-            width: 5,
-            height: 5,
+            width: 14 * scale,
+            height: 14 * scale,
             decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: ok ? AppColors.green : AppColors.red,
+              color: ok ? AppColors.accent : AppColors.red,
+              borderRadius: BorderRadius.circular(4 * scale),
+            ),
+            child: Icon(
+              Icons.air_rounded,
+              size: 10 * scale,
+              color: const Color(0xFF16210F),
             ),
           ),
-          const SizedBox(width: 5),
-          Icon(
-            Icons.air_rounded,
-            size: 12 * scale,
-            color: ok ? AppColors.accent : AppColors.red,
-          ),
-          const SizedBox(width: 3),
+          SizedBox(width: 5 * scale),
           Text(
-            'FAN',
+            'MACNDOWSFAN',
             style: TextStyle(
-              fontSize: 7.5 * scale,
-              letterSpacing: 1.4,
-              fontWeight: FontWeight.w600,
+              fontSize: 7 * scale,
+              letterSpacing: 1.1,
+              fontWeight: FontWeight.w800,
               color: AppColors.muted,
             ),
           ),
@@ -161,6 +165,7 @@ class CompactMonitor extends StatelessWidget {
             onTap: onCycleSize,
             label: size.label,
             scale: scale,
+            highlighted: true,
           ),
           _MiniButton(
             tooltip: 'Back to dashboard',
@@ -181,7 +186,9 @@ class CompactMonitor extends StatelessWidget {
 
   Widget _readings(FanReading? fan, double? temp, String? sensorLabel,
       double scale) {
-    final rpm = fan == null ? '—' : fan.actual.round().toString();
+    final rpm = fan == null || !fan.actual.isFinite
+        ? '—'
+        : fan.actual.round().toString();
     final detail = fan == null
         ? 'no fan'
         : (fan.target == null
@@ -193,7 +200,14 @@ class CompactMonitor extends StatelessWidget {
       children: [
         Expanded(
           flex: 3,
-          child: Column(
+          child: Container(
+            padding: EdgeInsets.symmetric(horizontal: 6 * scale),
+            decoration: BoxDecoration(
+              color: AppColors.card,
+              borderRadius: BorderRadius.circular(10 * scale),
+              border: Border.all(color: AppColors.accent.withValues(alpha: 0.16)),
+            ),
+            child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisAlignment: MainAxisAlignment.end,
             mainAxisSize: MainAxisSize.min,
@@ -208,10 +222,10 @@ class CompactMonitor extends StatelessWidget {
                     Text(
                       rpm,
                       style: TextStyle(
-                        fontSize: 34 * scale,
+                        fontSize: 30 * scale,
                         height: 1,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: -1.4,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -1.2,
                         color: fan == null ? AppColors.muted : AppColors.text,
                       ),
                     ),
@@ -236,12 +250,20 @@ class CompactMonitor extends StatelessWidget {
                 style: TextStyle(fontSize: 8 * scale, color: AppColors.muted),
               ),
             ],
+            ),
           ),
         ),
         SizedBox(width: 6 * scale),
         Expanded(
           flex: 2,
-          child: Column(
+          child: Container(
+            padding: EdgeInsets.symmetric(horizontal: 6 * scale),
+            decoration: BoxDecoration(
+              color: AppColors.card2,
+              borderRadius: BorderRadius.circular(10 * scale),
+              border: Border.all(color: AppColors.border),
+            ),
+            child: Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             mainAxisAlignment: MainAxisAlignment.end,
             mainAxisSize: MainAxisSize.min,
@@ -256,10 +278,10 @@ class CompactMonitor extends StatelessWidget {
                     Text(
                       temp == null ? '—' : temp.toStringAsFixed(0),
                       style: TextStyle(
-                        fontSize: 30 * scale,
+                        fontSize: 26 * scale,
                         height: 1,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: -1,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -0.8,
                         color: tempColor(temp),
                       ),
                     ),
@@ -284,6 +306,7 @@ class CompactMonitor extends StatelessWidget {
                 style: TextStyle(fontSize: 8 * scale, color: AppColors.muted),
               ),
             ],
+            ),
           ),
         ),
       ],
@@ -419,6 +442,7 @@ class _MiniButton extends StatelessWidget {
     required this.scale,
     this.icon,
     this.label,
+    this.highlighted = false,
   });
 
   final String tooltip;
@@ -426,6 +450,7 @@ class _MiniButton extends StatelessWidget {
   final double scale;
   final IconData? icon;
   final String? label;
+  final bool highlighted;
 
   @override
   Widget build(BuildContext context) {
@@ -441,12 +466,19 @@ class _MiniButton extends StatelessWidget {
           child: Center(
             child: icon != null
                 ? Icon(icon, size: 12 * scale, color: AppColors.muted)
-                : Text(
-                    label!,
-                    style: TextStyle(
-                      fontSize: 8.5 * scale,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.muted,
+                : Container(
+                    padding: EdgeInsets.symmetric(horizontal: 4 * scale, vertical: 1.5 * scale),
+                    decoration: BoxDecoration(
+                      color: highlighted ? AppColors.accent.withValues(alpha: 0.14) : null,
+                      borderRadius: BorderRadius.circular(4 * scale),
+                    ),
+                    child: Text(
+                      label!,
+                      style: TextStyle(
+                        fontSize: 8.5 * scale,
+                        fontWeight: FontWeight.w800,
+                        color: highlighted ? AppColors.accent : AppColors.muted,
+                      ),
                     ),
                   ),
           ),
@@ -477,11 +509,11 @@ class _FanPicker extends StatelessWidget {
       color: AppColors.card2,
       onSelected: onSelected,
       itemBuilder: (context) => [
-        for (final f in fans)
+        for (var i = 0; i < fans.length; i++)
           PopupMenuItem(
-            value: f.index,
+            value: i,
             height: 34,
-            child: Text(f.name, style: const TextStyle(fontSize: 11.5)),
+            child: Text(fans[i].name, style: const TextStyle(fontSize: 11.5)),
           ),
       ],
       child: Container(

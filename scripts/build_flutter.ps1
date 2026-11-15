@@ -6,8 +6,20 @@ param(
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
-$flutterBin = Join-Path $env:LOCALAPPDATA "dev\flutter\bin"
-if (Test-Path $flutterBin) { $env:PATH = "$flutterBin;$env:PATH" }
+
+# Locate flutter if not already on PATH
+if (-not (Get-Command flutter -ErrorAction SilentlyContinue)) {
+    $candidateFlutterDirs = @(
+        (Join-Path $env:LOCALAPPDATA "dev\flutter\bin"),
+        "D:\Soft\dev\flutter\bin"
+    )
+    foreach ($dir in $candidateFlutterDirs) {
+        if (Test-Path (Join-Path $dir "flutter.bat")) {
+            $env:PATH = "$dir;$env:PATH"
+            break
+        }
+    }
+}
 $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
 
 $profile = if ($Debug) { "debug" } else { "release" }

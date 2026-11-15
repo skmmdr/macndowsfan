@@ -56,11 +56,11 @@ class FanGauge extends StatelessWidget {
               ),
               const SizedBox(height: 10),
               Text(
-                rpm.round().toString(),
+                rpm.isFinite ? rpm.round().toString() : '—',
                 style: TextStyle(
                   fontSize: 54,
                   height: 1.0,
-                  fontWeight: FontWeight.w200,
+                  fontWeight: FontWeight.w700,
                   letterSpacing: -1.5,
                   color: color,
                   fontFeatures: const [FontFeature.tabularFigures()],
@@ -88,7 +88,7 @@ class FanGauge extends StatelessWidget {
                   ),
                 ),
                 child: Text(
-                  '${minRpm.round()} – ${maxRpm.round()}',
+                  '${(fraction * 100).round()}%  ·  ${minRpm.round()}–${maxRpm.round()}',
                   style: const TextStyle(
                     fontSize: 11,
                     color: AppColors.muted,
@@ -104,7 +104,7 @@ class FanGauge extends StatelessWidget {
   }
   double _fraction(double value) {
     final span = maxRpm - minRpm;
-    if (span <= 0) return 0;
+    if (!value.isFinite || !span.isFinite || span <= 0) return 0;
     return ((value - minRpm) / span).clamp(0.0, 1.0).toDouble();
   }
 }
@@ -131,17 +131,6 @@ class _GaugePainter extends CustomPainter {
     final radius = math.min(size.width, size.height) / 2 - 22;
     final rect = Rect.fromCircle(center: center, radius: radius);
     final fraction = _fraction();
-
-    // Inner backplate for depth.
-    final plateRect = Rect.fromCircle(center: center, radius: radius - 34);
-    canvas.drawCircle(
-      center,
-      radius - 34,
-      Paint()
-        ..shader = const RadialGradient(
-          colors: [Color(0xFF121A26), Color(0xFF0C121B)],
-        ).createShader(plateRect),
-    );
 
     // Track.
     canvas.drawArc(
@@ -172,20 +161,6 @@ class _GaugePainter extends CustomPainter {
     }
 
     if (fraction > 0.001) {
-      // Glow under the value arc.
-      canvas.drawArc(
-        rect,
-        _start,
-        _sweep * fraction,
-        false,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 20
-          ..strokeCap = StrokeCap.round
-          ..color = accent.withValues(alpha: 0.20)
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 16),
-      );
-
       // Value arc.
       canvas.drawArc(
         rect,
@@ -210,13 +185,6 @@ class _GaugePainter extends CustomPainter {
       // End dot.
       final angle = _start + _sweep * fraction;
       final dot = center + Offset(math.cos(angle), math.sin(angle)) * radius;
-      canvas.drawCircle(
-        dot,
-        10,
-        Paint()
-          ..color = accent.withValues(alpha: 0.35)
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8),
-      );
       canvas.drawCircle(dot, 5.5, Paint()..color = Colors.white);
       canvas.drawCircle(
         dot,
@@ -228,7 +196,7 @@ class _GaugePainter extends CustomPainter {
 
   double _fraction() {
     final span = maxRpm - minRpm;
-    if (span <= 0) return 0;
+    if (!value.isFinite || !span.isFinite || span <= 0) return 0;
     return ((value - minRpm) / span).clamp(0.0, 1.0).toDouble();
   }
 

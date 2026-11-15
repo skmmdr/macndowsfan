@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::ffi::{c_char, CStr, CString};
+use std::time::{Duration, Instant};
 
 use serde_json::json;
 
@@ -13,6 +14,8 @@ pub struct MfHandle {
     settings: Settings,
     error: Option<String>,
     hint: Option<String>,
+    last_sensor_refresh: Option<Instant>,
+    needs_restore: bool,
 }
 
 fn to_c(v: serde_json::Value) -> *mut c_char {
@@ -40,9 +43,9 @@ fn err_value(error: &Option<String>, hint: &Option<String>) -> serde_json::Value
 
 fn snapshot_to_json(s: &Snapshot) -> serde_json::Value {
     json!({
-                "ok": true,
-                "error": serde_json::Value::Null,
-                "hint": serde_json::Value::Null,
+                "ok": s.error.is_none(),
+                "error": &s.error,
+                "hint": &s.error_hint,
                 "modeStyle": &s.mode_style,
                 "keyCount": s.key_count,
                 "updatedMs": s.updated_ms,
@@ -68,7 +71,15 @@ fn snapshot_to_json(s: &Snapshot) -> serde_json::Value {
 
 fn snapshot_value(h: &MfHandle) -> serde_json::Value {
     match &h.machine {
-        Some(m) => snapshot_to_json(&m.sample()),
+        Some(m) => {
+            let mut snap = m.sample();
+            if h.needs_restore {
+                snap.error = Some(h.error.clone().unwrap_or_else(||
+                    "Cannot confirm automatic fan control".to_string()));
+                snap.error_hint = h.hint.clone();
+            }
+            snapshot_to_json(&snap)
+        }
         None => err_value(&h.error, &h.hint),
     }
 }
@@ -92,6 +103,8 @@ pub extern "C" fn mf_create() -> *mut MfHandle {
         settings: config::load(),
         error: None,
         hint: None,
+        last_sensor_refresh: None,
+        needs_restore: false,
     });
     match Machine::open() {
         Ok(m) => {
@@ -139,18 +152,36 @@ pub extern "C" fn mf_reconnect(h: *mut MfHandle) -> *mut c_char {
         return to_c(json!({"ok": false, "error": "null handle"}));
     }
     let h = unsafe { &mut *h };
-    match Machine::open() {
-        Ok(m) => {
-            h.machine = Some(m);
-            h.error = None;
-            h.hint = None;
-        }
-        Err(e) => {
-            h.machine = None;
-            set_error(h, &e);
+    // A broken handle may be unable to restore control. Close it so the
+    // exclusive device can be reopened, then retry restoration on the new
+    // handle before any saved profile is applied.
+    if let Some(machine) = h.machine.as_mut() {
+        if let Err(e) = machine.restore_auto() {
+            config::log(&format!("restore before reconnect failed: {e}"));
         }
     }
-    to_c(snapshot_value(h))
+    h.machine = None;
+    h.needs_restore = true;
+    match Machine::open() {
+        Ok(mut machine) => {
+            let restore = machine.restore_auto();
+            h.machine = Some(machine);
+            h.last_sensor_refresh = None;
+            if let Err(e) = restore {
+                set_error(h, &e);
+                return to_c(err_value(&h.error, &h.hint));
+            }
+            h.needs_restore = false;
+            h.error = None;
+            h.hint = None;
+            to_c(snapshot_value(h))
+        }
+        Err(e) => {
+            set_error(h, &e);
+            h.error = Some(format!("{e}; cannot confirm automatic fan control"));
+            to_c(err_value(&h.error, &h.hint))
+        }
+    }
 }
 
 #[no_mangle]
@@ -174,11 +205,25 @@ pub extern "C" fn mf_tick(h: *mut MfHandle) -> *mut c_char {
     if h.machine.is_none() {
         return to_c(snapshot_value(h));
     }
+    if h.needs_restore {
+        if let Err(e) = ensure_restored(h) {
+            set_error(h, &e);
+            let mut snapshot = h.machine.as_ref().expect("checked above").sample();
+            snapshot.error = h.error.clone();
+            snapshot.error_hint = h.hint.clone();
+            return to_c(snapshot_to_json(&snapshot));
+        }
+    }
 
     let mut failure: Option<crate::smc::SmcError> = None;
     let settings = h.settings.clone();
-    let snapshot = {
+    let refresh = h.last_sensor_refresh.map_or(true, |t| t.elapsed() >= Duration::from_secs(10));
+    let mut snapshot = {
         let machine = h.machine.as_mut().expect("checked above");
+        if refresh {
+            machine.refresh_sensors();
+            h.last_sensor_refresh = Some(Instant::now());
+        }
         let snap = machine.sample();
         let temps: HashMap<String, f32> = snap
             .temps
@@ -200,8 +245,13 @@ pub extern "C" fn mf_tick(h: *mut MfHandle) -> *mut c_char {
     if let Some(e) = failure {
         config::log(&format!("tick apply failed: {e}"));
         set_error(h, &e);
-        h.machine = None;
-        return to_c(err_value(&h.error, &h.hint));
+        if let Err(restore_error) = ensure_restored(h) {
+            config::log(&format!("restore after tick failure failed: {restore_error}"));
+            h.error = Some(format!("{e}; restore automatic failed: {restore_error}"));
+        }
+        snapshot.error = h.error.clone();
+        snapshot.error_hint = h.hint.clone();
+        return to_c(snapshot_to_json(&snapshot));
     }
 
     to_c(snapshot_to_json(&snapshot))
@@ -243,6 +293,15 @@ pub extern "C" fn mf_apply(h: *mut MfHandle, settings_json: *const c_char) -> *m
     h.settings = settings.clone();
     config::save(&settings);
 
+    if h.machine.is_none() {
+        return to_c(snapshot_value(h));
+    }
+    if h.needs_restore {
+        if let Err(e) = ensure_restored(h) {
+            set_error(h, &e);
+            return to_c(snapshot_value(h));
+        }
+    }
     let Some(machine) = h.machine.as_mut() else {
         return to_c(err_value(&h.error, &h.hint));
     };
@@ -268,6 +327,10 @@ pub extern "C" fn mf_apply(h: *mut MfHandle, settings_json: *const c_char) -> *m
         }
         Err(e) => {
             set_error(h, &e);
+            if let Err(restore_error) = ensure_restored(h) {
+                config::log(&format!("restore after apply failure failed: {restore_error}"));
+                h.error = Some(format!("{e}; restore automatic failed: {restore_error}"));
+            }
             to_c(json!({
                 "ok": false,
                 "error": &h.error,
@@ -288,10 +351,7 @@ pub extern "C" fn mf_restore_auto(h: *mut MfHandle) -> *mut c_char {
         f.mode = ControlMode::Automatic;
     }
     config::save(&h.settings);
-    if let Some(machine) = h.machine.as_mut() {
-        machine.restore_auto();
-    }
-    to_c(json!({"ok": true}))
+    restore_auto_result(h)
 }
 
 /// Put the fans back under firmware control *without* changing the saved
@@ -302,9 +362,29 @@ pub extern "C" fn mf_suspend(h: *mut MfHandle) -> *mut c_char {
         return to_c(json!({"ok": false, "error": "null handle"}));
     }
     let h = unsafe { &mut *h };
-    if let Some(machine) = h.machine.as_mut() {
-        machine.restore_auto();
-        config::log("core: suspended, fans restored to firmware control");
+    restore_auto_result(h)
+}
+
+fn ensure_restored(h: &mut MfHandle) -> crate::smc::Result<()> {
+    let result = match h.machine.as_mut() {
+        Some(machine) => machine.restore_auto(),
+        None => Err(crate::smc::SmcError::msg("SMC unavailable; cannot confirm automatic fan control")),
+    };
+    h.needs_restore = result.is_err();
+    result
+}
+
+fn restore_auto_result(h: &mut MfHandle) -> *mut c_char {
+    let result = ensure_restored(h);
+    match result {
+        Ok(()) => {
+            config::log("core: fans restored to firmware control");
+            to_c(json!({"ok": true}))
+        }
+        Err(e) => {
+            config::log(&format!("automatic fan control restore failed: {e}"));
+            set_error(h, &e);
+            to_c(json!({"ok": false, "error": &h.error, "hint": &h.hint}))
+        }
     }
-    to_c(json!({"ok": true}))
 }

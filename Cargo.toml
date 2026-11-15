@@ -1,6 +1,6 @@
 [package]
 name = "macndowsfan"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 description = "Fan control and temperature monitoring for Apple Macs running Windows (Boot Camp)"
 license = "MIT"

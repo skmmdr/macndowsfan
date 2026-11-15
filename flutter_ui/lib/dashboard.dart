@@ -41,17 +41,18 @@ class Dashboard extends StatelessWidget {
                 child: Column(
                   children: [
                     _Header(controller: controller, onQuit: onQuit, onCompact: onCompact),
-                    if (controller.actionError != null) ...[
+                    if (controller.actionError != null ||
+                        (!snap.ok && snap.error != null && snap.fans.isNotEmpty)) ...[
                       const SizedBox(height: 10),
-                      _ActionError(text: controller.actionError!),
+                      _ActionError(text: controller.actionError ?? snap.error!),
                     ],
                     const SizedBox(height: 14),
                     Expanded(
-                      child: (!snap.ok && snap.fans.isEmpty)
+                      child: snap.fans.isEmpty
                           ? _ErrorView(controller: controller, version: version)
                           : LayoutBuilder(
                               builder: (context, constraints) {
-                                final wide = constraints.maxWidth >= 1020;
+                                final wide = constraints.maxWidth >= 800;
                                 if (wide) {
                                   return Row(
                                     crossAxisAlignment:
@@ -137,28 +138,21 @@ class _Background extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return IgnorePointer(
-      child: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [AppColors.bg, AppColors.bg2, Color(0xFF090D14)],
+      child: Stack(
+        fit: StackFit.expand,
+        children: const [
+          ColoredBox(color: AppColors.bg),
+          Positioned(
+            top: -240,
+            right: -160,
+            child: _Glow(size: 620, color: AppColors.accent, opacity: 0.05),
           ),
-        ),
-        child: Stack(
-          children: const [
-            Positioned(
-              top: -180,
-              right: -120,
-              child: _Glow(size: 560, color: AppColors.accent, opacity: 0.10),
-            ),
-            Positioned(
-              bottom: -220,
-              left: -160,
-              child: _Glow(size: 540, color: AppColors.accent2, opacity: 0.08),
-            ),
-          ],
-        ),
+          Positioned(
+            bottom: -280,
+            left: -200,
+            child: _Glow(size: 660, color: AppColors.accent2, opacity: 0.035),
+          ),
+        ],
       ),
     );
   }
@@ -183,10 +177,7 @@ class _Glow extends StatelessWidget {
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         gradient: RadialGradient(
-          colors: [
-            color.withValues(alpha: opacity),
-            color.withValues(alpha: 0.0),
-          ],
+          colors: [color.withValues(alpha: opacity), color.withValues(alpha: 0)],
         ),
       ),
     );
@@ -203,65 +194,69 @@ class _Header extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final snap = controller.snapshot;
-    return Row(
-      children: [
-        const _Logo(),
-        const SizedBox(width: 12),
-        const Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'macndowsfan',
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.w600,
-                letterSpacing: -0.2,
-              ),
-            ),
-            SizedBox(height: 2),
-            Text(
-              'iMac14,2  ·  Rust core  ·  Flutter UI',
-              style: TextStyle(fontSize: 11, color: AppColors.muted),
-            ),
-          ],
-        ),
-        const Spacer(),
-        TextButton.icon(
-          onPressed: onCompact,
-          icon: const Icon(Icons.picture_in_picture_alt_outlined, size: 17),
-          label: const Text('Widget'),
-        ),
-        const SizedBox(width: 8),
-        StatusPill(ok: snap.ok, hasError: snap.error != null),
-        const SizedBox(width: 10),
-        if (snap.updatedMs > 0) _Updated(updatedMs: snap.updatedMs),
-        const SizedBox(width: 12),
-        FilledButton.icon(
-          onPressed: controller.restoreAutomatic,
-          icon: const Icon(Icons.restore_rounded, size: 16),
-          label: const Text('Restore automatic'),
-        ),
-        const SizedBox(width: 4),
-        IconButton(
-          tooltip: 'Reconnect SMC',
-          onPressed: controller.reconnect,
-          icon: const Icon(Icons.refresh_rounded, size: 19),
-        ),
-        if (onQuit != null)
-          Padding(
-            padding: const EdgeInsets.only(left: 4),
-            child: TextButton(
-              onPressed: onQuit,
-              style: TextButton.styleFrom(
-                foregroundColor: AppColors.muted,
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                minimumSize: Size.zero,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              child: const Text('Quit', style: TextStyle(fontSize: 12)),
+    return GlassCard(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+      child: Wrap(
+        spacing: 14,
+        runSpacing: 10,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          const SizedBox(
+            width: 252,
+            child: Row(
+              children: [
+                _Logo(),
+                SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('macndowsfan', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(
+                        fontSize: 18, fontWeight: FontWeight.w800, letterSpacing: -0.4,
+                      )),
+                      SizedBox(height: 3),
+                      Text('FAN CONTROL FOR WINDOWS', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(
+                        fontSize: 9, letterSpacing: 1.2, fontWeight: FontWeight.w600, color: AppColors.muted,
+                      )),
+                    ],
+                  ),
+                ),
+              ],
             ),
           ),
-      ],
+          StatusPill(
+            ok: snap.ok,
+            hasError: snap.error != null,
+            label: snap.error != null && snap.fans.isNotEmpty ? 'Control error' : null,
+          ),
+          if (snap.updatedMs > 0) _Updated(updatedMs: snap.updatedMs),
+          FilledButton.icon(
+            onPressed: controller.restoreAutomatic,
+            icon: const Icon(Icons.restore_rounded, size: 16),
+            label: const Text('Restore automatic'),
+          ),
+          SizedBox(
+            height: 40,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextButton.icon(
+                  onPressed: onCompact,
+                  icon: const Icon(Icons.picture_in_picture_alt_outlined, size: 17),
+                  label: const Text('Widget'),
+                ),
+                IconButton(
+                  tooltip: 'Reconnect SMC',
+                  onPressed: controller.reconnect,
+                  icon: const Icon(Icons.refresh_rounded, size: 19),
+                ),
+                if (onQuit != null)
+                  TextButton(onPressed: onQuit, child: const Text('Quit')),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -271,29 +266,56 @@ class _Logo extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    return SizedBox(
       width: 42,
       height: 42,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(13),
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [AppColors.accent, AppColors.accent2],
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.accent.withValues(alpha: 0.30),
-            blurRadius: 22,
-            offset: const Offset(0, 6),
+      child: Column(
+        children: [
+          Expanded(
+            child: Row(
+              children: const [
+                Expanded(
+                  child: _LogoTile(
+                    color: AppColors.accent,
+                    child: Icon(Icons.air_rounded, size: 13, color: Color(0xFF16210F)),
+                  ),
+                ),
+                SizedBox(width: 3),
+                Expanded(child: _LogoTile(color: AppColors.accent2)),
+              ],
+            ),
+          ),
+          const SizedBox(height: 3),
+          Expanded(
+            child: Row(
+              children: const [
+                Expanded(child: _LogoTile(color: AppColors.card2)),
+                SizedBox(width: 3),
+                Expanded(child: _LogoTile(color: AppColors.border)),
+              ],
+            ),
           ),
         ],
       ),
-      child: const Icon(
-        Icons.air_rounded,
-        size: 23,
-        color: Color(0xFF071019),
+    );
+  }
+}
+
+class _LogoTile extends StatelessWidget {
+  const _LogoTile({required this.color, this.child});
+
+  final Color color;
+  final Widget? child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(6),
       ),
+      child: child,
     );
   }
 }
@@ -377,6 +399,17 @@ class _FanColumn extends StatelessWidget {
     final lo = fan.minRpm > 0 ? fan.minRpm : 800.0;
     final hi = fan.maxRpm > lo ? fan.maxRpm : lo + 1;
 
+    double? peak;
+    String peakLabel = 'no sensors';
+    for (final t in controller.snapshot.temps) {
+      final v = t.value;
+      if (v == null || !v.isFinite) continue;
+      if (peak == null || v > peak) {
+        peak = v;
+        peakLabel = t.label;
+      }
+    }
+
     return Column(
       children: [
         if (fans.length > 1) ...[
@@ -398,7 +431,7 @@ class _FanColumn extends StatelessWidget {
           gradient: const LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
-            colors: [Color(0xFF16202D), Color(0xFF0E141D)],
+            colors: [Color(0xFF344C3C), Color(0xFF222F28)],
           ),
           child: Column(
             children: [
@@ -411,8 +444,9 @@ class _FanColumn extends StatelessWidget {
                         Text(
                           fan.name,
                           style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
+                            fontSize: 19,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -0.4,
                           ),
                         ),
                         const SizedBox(height: 3),
@@ -446,7 +480,7 @@ class _FanColumn extends StatelessWidget {
                   minRpm: fan.minRpm,
                   maxRpm: fan.maxRpm,
                   name: fan.name,
-                  size: 210,
+                  size: 218,
                 ),
               ),
               const SizedBox(height: 4),
@@ -467,13 +501,60 @@ class _FanColumn extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 12),
+        IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: _StatTile(
+                  icon: Icons.speed_rounded,
+                  label: 'TARGET',
+                  value: fan.target == null ? '—' : fan.target!.round().toString(),
+                  unit: 'RPM',
+                  accent: AppColors.accent2,
+                  caption: setting.mode.label,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _StatTile(
+                  icon: Icons.local_fire_department_rounded,
+                  label: 'PEAK',
+                  value: peak == null ? '—' : peak.toStringAsFixed(0),
+                  unit: '°C',
+                  accent: tempColor(peak),
+                  caption: peakLabel,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _StatTile(
+                  icon: Icons.air_rounded,
+                  label: 'SPEED RANGE',
+                  value: fan.actual.isFinite && fan.maxRpm > fan.minRpm
+                      ? (fan.fraction * 100).round().toString()
+                      : '—',
+                  unit: '%',
+                  accent: AppColors.accent,
+                  caption: '${fan.minRpm.round()}–${fan.maxRpm.round()} RPM',
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
         GlassCard(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const _SectionLabel('PROFILE'),
-              const SizedBox(height: 8),
+              const _SectionLabel('PROFILES'),
+              const SizedBox(height: 6),
+              const Text(
+                'Choose a preset, or adjust the controls below for a custom profile.',
+                style: TextStyle(fontSize: 11.5, color: AppColors.muted),
+              ),
+              const SizedBox(height: 10),
               Wrap(
                 spacing: 6,
                 runSpacing: 6,
@@ -481,14 +562,33 @@ class _FanColumn extends StatelessWidget {
                   for (final profile in FanProfile.values)
                     _ProfileChip(
                       label: profile.label,
-                      tooltip: profile.hint,
+                      tooltip: controller.profileUnavailableReason(index, profile) ?? profile.hint,
                       selected: setting.profile == profile.id,
-                      onTap: () => controller.applyProfile(index, profile),
+                      onTap: controller.profileUnavailableReason(index, profile) == null
+                          ? () => controller.applyProfile(index, profile)
+                          : null,
                     ),
                 ],
               ),
-              const SizedBox(height: 12),
-              const _SectionLabel('MODE'),
+              for (final profile in FanProfile.values)
+                if (controller.profileUnavailableReason(index, profile) case final reason?)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(
+                      reason,
+                      style: const TextStyle(fontSize: 11, color: AppColors.muted),
+                    ),
+                  ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        GlassCard(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const _SectionLabel('CONTROL MODE'),
               const SizedBox(height: 8),
               SegmentedButton<ControlMode>(
                 segments: const [
@@ -762,6 +862,11 @@ class _SensorControls extends StatelessWidget {
           onChanged: (v) => controller.setTemperatures(index, max: v),
         ),
         const SizedBox(height: 2),
+        const Text(
+          'The fan runs at minimum speed below the start temperature and reaches maximum speed at the full-speed temperature.',
+          style: TextStyle(fontSize: 11, color: AppColors.muted, height: 1.4),
+        ),
+        const SizedBox(height: 8),
         FanCurve(
           start: setting.startTemp,
           max: setting.maxTemp,
@@ -772,14 +877,22 @@ class _SensorControls extends StatelessWidget {
         const SizedBox(height: 6),
         Row(
           children: [
-            Text(
-              current == null
-                  ? 'No reading from ${setting.sensor}'
-                  : '${setting.sensor} now ${current.toStringAsFixed(1)} °C',
-              style: const TextStyle(fontSize: 11, color: AppColors.muted),
+            Expanded(
+              child: Text(
+                current == null
+                    ? '${setting.sensor} unavailable · maximum speed requested'
+                    : '${setting.sensor} now ${current.toStringAsFixed(1)} °C',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: current == null ? AppColors.amber : AppColors.muted,
+                ),
+              ),
             ),
-            const Spacer(),
-            _ValueChip('${target.round()} RPM', AppColors.accent),
+            const SizedBox(width: 8),
+            Tooltip(
+              message: 'Estimated curve target; the actual target may differ while readings are smoothed.',
+              child: _ValueChip('~${target.round()} RPM', AppColors.accent),
+            ),
           ],
         ),
       ],
@@ -850,21 +963,38 @@ class _SensorsPanel extends StatelessWidget {
     final temps = controller.snapshot.temps;
     final setting = controller.fanSetting(controller.selectedFan);
 
+    TempReading? hottest;
+    for (final t in temps) {
+      final v = t.value;
+      if (v == null || !v.isFinite) continue;
+      if (hottest == null || v > hottest.value!) hottest = t;
+    }
+    final hero = hottest;
+    final rest = temps.where((t) => t.key != hero?.key).toList();
+
+    void follow(TempReading t) {
+      controller.setSensor(controller.selectedFan, t.key);
+      controller.setMode(controller.selectedFan, ControlMode.sensor);
+    }
+
+    bool following(TempReading t) =>
+        setting?.mode == ControlMode.sensor && setting?.sensor == t.key;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
+        Wrap(
+          spacing: 8,
+          runSpacing: 6,
+          crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             const Icon(Icons.thermostat_rounded,
                 size: 17, color: AppColors.muted),
-            const SizedBox(width: 8),
             const Text(
-              'Temperatures',
-              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+              'Temperature sensors',
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
             ),
-            const SizedBox(width: 8),
             _Chip('${temps.length}'),
-            const Spacer(),
             const Text(
               'click a card to follow it',
               style: TextStyle(fontSize: 10.5, color: AppColors.muted),
@@ -884,46 +1014,143 @@ class _SensorsPanel extends StatelessWidget {
               ),
             ),
           )
-        else
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final columns = constraints.maxWidth > 780
-                  ? 3
-                  : constraints.maxWidth > 420
-                      ? 2
-                      : 1;
-              const gap = 12.0;
-              final width =
-                  (constraints.maxWidth - gap * (columns - 1)) / columns;
-              return Wrap(
-                spacing: gap,
-                runSpacing: gap,
-                children: [
-                  for (final t in temps)
-                    SizedBox(
-                      width: width,
-                      child: Tooltip(
-                        message:
-                            '${sensorHint(t.key)}\n\nClick to follow ${t.label}',
-                        child: SensorCard(
-                          reading: t,
-                          history: controller.history[t.key] ?? const [],
-                          selected: setting?.mode == ControlMode.sensor &&
-                              setting?.sensor == t.key,
-                          onTap: () {
-                            controller.setSensor(
-                                controller.selectedFan, t.key);
-                            controller.setMode(
-                                controller.selectedFan, ControlMode.sensor);
-                          },
+        else ...[
+          if (hero != null) Tooltip(
+            message: '${sensorHint(hero.key)}\n\nClick to follow ${hero.label}',
+            child: SensorCard(
+              reading: hero,
+              history: controller.history[hero.key] ?? const [],
+              hero: true,
+              badge: 'HOTTEST',
+              selected: following(hero),
+              onTap: () => follow(hero),
+            ),
+          ),
+          if (rest.isNotEmpty) ...[
+            if (hero != null) const SizedBox(height: 12),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final columns = constraints.maxWidth > 780
+                    ? 3
+                    : constraints.maxWidth > 420
+                        ? 2
+                        : 1;
+                const gap = 12.0;
+                final width =
+                    (constraints.maxWidth - gap * (columns - 1)) / columns;
+                return Wrap(
+                  spacing: gap,
+                  runSpacing: gap,
+                  children: [
+                    for (final t in rest)
+                      SizedBox(
+                        width: width,
+                        child: Tooltip(
+                          message:
+                              '${sensorHint(t.key)}\n\nClick to follow ${t.label}',
+                          child: SensorCard(
+                            reading: t,
+                            history: controller.history[t.key] ?? const [],
+                            selected: following(t),
+                            onTap: () => follow(t),
+                          ),
                         ),
                       ),
-                    ),
-                ],
-              );
-            },
-          ),
+                  ],
+                );
+              },
+            ),
+          ],
+        ],
       ],
+    );
+  }
+}
+
+class _StatTile extends StatelessWidget {
+  const _StatTile({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.unit,
+    required this.accent,
+    required this.caption,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+  final String unit;
+  final Color accent;
+  final String caption;
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassCard(
+      padding: const EdgeInsets.fromLTRB(13, 12, 13, 12),
+      radius: 16,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 13, color: accent),
+              const SizedBox(width: 5),
+              Expanded(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 8.5,
+                    letterSpacing: 1.3,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.muted,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: RichText(
+              text: TextSpan(
+                children: [
+                  TextSpan(
+                    text: value,
+                    style: TextStyle(
+                      fontSize: 22,
+                      height: 1,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.6,
+                      color: accent,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                  TextSpan(
+                    text: ' $unit',
+                    style: const TextStyle(
+                      fontSize: 9,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.muted,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 5),
+          Text(
+            caption,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 9.5, color: AppColors.muted),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1180,14 +1407,28 @@ class _SectionLabel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Text(
-      text,
-      style: const TextStyle(
-        fontSize: 10,
-        letterSpacing: 2,
-        color: AppColors.muted,
-        fontWeight: FontWeight.w600,
-      ),
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 5,
+          height: 5,
+          decoration: const BoxDecoration(
+            color: AppColors.accent,
+            shape: BoxShape.circle,
+          ),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          text,
+          style: const TextStyle(
+            fontSize: 9.5,
+            letterSpacing: 1.8,
+            color: AppColors.muted,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
     );
   }
 }
@@ -1277,9 +1518,10 @@ class _PresetChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
         onTap: onTap,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
@@ -1309,15 +1551,17 @@ class _ProfileChip extends StatelessWidget {
   final String label;
   final String tooltip;
   final bool selected;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
+    final available = onTap != null;
     return Tooltip(
       message: tooltip,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: GestureDetector(
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(9),
           onTap: onTap,
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 160),
@@ -1334,7 +1578,7 @@ class _ProfileChip extends StatelessWidget {
               ),
             ),
             child: Text(
-              label,
+              available ? label : '$label (unavailable)',
               style: TextStyle(
                 fontSize: 10.5,
                 fontWeight: selected ? FontWeight.w600 : FontWeight.w500,

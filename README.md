@@ -7,15 +7,16 @@ GTX 780M) with Windows 10 Pro 19045.
 The app is a Rust reimplementation of Macs Fan Control, with two frontends
 sharing the same Rust SMC core:
 
-* **Flutter UI** — animated RPM gauge, temperature cards with live sparklines,
-  constant/sensor fan curves, click-to-follow sensors, dark native window.
+* **Flutter UI** — bento dashboard with a live RPM gauge, temperature tiles
+  with sparklines, constant/sensor fan curves, click-to-follow sensors, dark
+  native window.
 * **egui app** — lightweight fallback, plus `--probe` / `--selftest` CLI
   diagnostics.
 
 ## Install (recommended)
 
 ```powershell
-.\dist\macndowsfan-setup-0.1.0.exe
+.\dist\macndowsfan-setup-0.3.0.exe
 ```
 
 Installs to `C:\Program Files\macndowsfan` and:
@@ -32,6 +33,8 @@ Installs to `C:\Program Files\macndowsfan` and:
 
 The uninstaller keeps settings by default and removes the `AppleSMC` service
 only when it points at macndowsfan's own driver copy.
+
+See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 ### Driver requirement
 
@@ -157,8 +160,8 @@ The window is 1180×880 with a dark DWM title bar, the app icon from
 Uses NSIS 3.11 (portable copy in `%TEMP%\kilo\nsis\nsis-3.11`):
 
 ```powershell
-& "$env:TEMP\kilo\nsis\nsis-3.11\makensis.exe" .\installer\macndowsfan.nsi
-Copy-Item .\installer\output\macndowsfan-setup-0.1.0.exe .\dist\ -Force
+& "$env:TEMP\kilo\nsis\nsis-3.11\makensis.exe" (Resolve-Path .\installer\macndowsfan.nsi).Path
+Copy-Item .\installer\output\macndowsfan-setup-0.3.0.exe .\dist\ -Force
 ```
 
 The script installs `dist\*`, creates shortcuts, writes the startup entry,
@@ -231,7 +234,8 @@ The IOCTL protocol and the `\\.\APPLESMC` device were recovered from
 
 iMac14,2 uses a single fan (`Main`) and the global `FS! ` forced bitmask.
 Fan keys: `FNum`, `F<i>ID`, `F<i>Ac`, `F<i>Mn`, `F<i>Mx`, `F<i>Tg`; per-fan
-`F<i>Md` is used on Macs that have it. Encodings: `fpe2` (14.2 fixed point),
+`F<i>Md` is used on Macs that have it. If a counted fan's per-fan mode key
+cannot be verified, the app reports an error rather than assuming a shared key. Encodings: `fpe2` (14.2 fixed point),
 `flt ` (big-endian IEEE-754), `sp78` (8.8 signed temperatures).
 
 ### Temperature sensor audit (iMac14,2)
@@ -270,10 +274,23 @@ state when its tray icon is hard to reach.
 
 ## Safety
 
-* Targets are clamped to the fan's reported min/max (with a safe floor if the
-  SMC reports 0).
+* Manual control requires finite, positive SMC-reported min/max limits and a
+  supported target key. If these cannot be verified, the app refuses to force
+  that fan; reconnect after the SMC is available.
+* All fans counted by `FNum` must have their mode restored and verified before
+  Quit reports success. If `FNum` cannot be read, the app cannot confirm that
+  firmware control has been restored.
+* Forced fan targets are checked against the SMC on each control tick and
+  reapplied if they drift from the last commanded value.
 * Closing the window only hides it to the tray and keeps the active profile.
   Use **Quit** (tray or header) to restore Automatic fan control.
+* If the control sensor is unavailable or returns an invalid reading, sensor
+  mode commands maximum fan speed until a valid reading returns.
+* Quit reports a failure and keeps the app running if it cannot confirm that
+  firmware control was restored. Restore the SMC connection and retry.
+* Upgrades and uninstall require the app to be quit from its tray menu first;
+  the installer does not force-kill it. Previously installed uninstallers may
+  still use the old force-kill behavior.
 * If the process is killed (Task Manager), a forced target can remain in the
   SMC. Reboot or reopen the app and choose Automatic.
 * Forcing fans bypasses firmware thermal policy — use sane values.

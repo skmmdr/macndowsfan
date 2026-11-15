@@ -38,6 +38,7 @@ fn run(shared: Arc<Shared>, events: Receiver<Event>) {
     let mut machine: Option<Machine> = None;
     let mut last_attempt: Option<Instant> = None;
     let mut last_sensor_refresh: Option<Instant> = None;
+    let mut needs_restore = false;
     let mut shutting_down = false;
 
     while !shutting_down {
@@ -54,8 +55,18 @@ fn run(shared: Arc<Shared>, events: Receiver<Event>) {
             }
             Ok(Event::RestoreAuto) => {
                 if let Some(m) = machine.as_mut() {
-                    m.restore_auto();
-                    config::log("restore automatic requested by user");
+                    match m.restore_auto() {
+                        Ok(()) => {
+                            needs_restore = false;
+                            config::log("restore automatic requested by user");
+                        }
+                        Err(e) => {
+                            needs_restore = true;
+                            config::log(&format!("restore automatic failed: {e}"));
+                        }
+                    }
+                } else {
+                    needs_restore = true;
                 }
             }
             Ok(Event::Apply) => {}
@@ -86,8 +97,21 @@ fn run(shared: Arc<Shared>, events: Receiver<Event>) {
             }
         }
 
-        let mut disconnect = false;
         if let Some(m) = machine.as_mut() {
+            if needs_restore {
+                match m.restore_auto() {
+                    Ok(()) => needs_restore = false,
+                    Err(e) => {
+                        let mut snap = m.sample();
+                        snap.error = Some(format!("restore automatic failed: {e}"));
+                        *shared.snapshot.lock().unwrap() = snap;
+                        // Release the stale device handle, then reopen it on
+                        // the next attempt with needs_restore still set.
+                        machine = None;
+                        continue;
+                    }
+                }
+            }
             let refresh = last_sensor_refresh.map_or(true, |t| t.elapsed() >= Duration::from_secs(10));
             if refresh {
                 m.refresh_sensors();
@@ -114,20 +138,29 @@ fn run(shared: Arc<Shared>, events: Receiver<Event>) {
                     if !hint.is_empty() {
                         snap.error_hint = Some(hint.to_string());
                     }
-                    // The driver may have gone away; force a reconnect.
-                    disconnect = true;
+                    // Do not abandon a potentially forced fan without first
+                    // trying to return it to firmware control.
+                    match m.restore_auto() {
+                        Ok(()) => {}
+                        Err(restore_error) => {
+                            needs_restore = true;
+                            config::log(&format!("restore after apply failure failed: {restore_error}"));
+                            snap.error = Some(format!("{e}; restore automatic failed: {restore_error}"));
+                        }
+                    }
                 }
             }
 
             *shared.snapshot.lock().unwrap() = snap;
         }
-        if disconnect {
-            machine = None;
-        }
     }
 
     if let Some(m) = machine.as_mut() {
-        m.restore_auto();
-        config::log("automatic fan control restored on exit");
+        match m.restore_auto() {
+            Ok(()) => config::log("automatic fan control restored on exit"),
+            Err(e) => config::log(&format!("failed to restore automatic fan control on exit: {e}")),
+        }
+    } else if needs_restore {
+        config::log("failed to restore automatic fan control on exit: SMC unavailable");
     }
 }

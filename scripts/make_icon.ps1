@@ -26,54 +26,31 @@ function New-IconBitmap([int]$size) {
     $g.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
     $g.Clear([System.Drawing.Color]::Transparent)
 
-    $rect = New-Object System.Drawing.RectangleF(0, 0, $size, $size)
-    $path = New-RoundedPath 0 0 ([single]$size) ([single]$size) ([single]($size * 0.22))
-    $bg = New-Object System.Drawing.Drawing2D.LinearGradientBrush(
-        (New-Object System.Drawing.PointF(0, 0)),
-        (New-Object System.Drawing.PointF($size, $size)),
-        [System.Drawing.Color]::FromArgb(255, 91, 200, 255),
-        [System.Drawing.Color]::FromArgb(255, 139, 124, 255)
-    )
-    $g.FillPath($bg, $path)
+    $s = [single]$size
+    $shell = New-RoundedPath 0 0 $s $s ([single]($s * 0.22))
+    $background = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 203, 241, 160))
+    $g.FillPath($background, $shell)
 
-    # Soft highlight in the upper-left corner.
-    $hl = New-Object System.Drawing.Drawing2D.GraphicsPath
-    $hl.AddEllipse([single](-$size * 0.35), [single](-$size * 0.55), [single]($size * 1.2), [single]($size * 0.9))
-    $hlBrush = New-Object System.Drawing.Drawing2D.PathGradientBrush($hl)
-    $hlBrush.CenterColor = [System.Drawing.Color]::FromArgb(55, 255, 255, 255)
-    $hlBrush.SurroundColors = @([System.Drawing.Color]::FromArgb(0, 255, 255, 255))
-    $g.SetClip($path)
-    $g.FillPath($hlBrush, $hl)
-    $g.ResetClip()
+    # One large dark fan, with no fine detail to disappear at tray size.
+    $ink = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 22, 33, 16))
+    for ($i = 0; $i -lt 3; $i++) {
+        $state = $g.Save()
+        $g.TranslateTransform([single]($s * 0.5), [single]($s * 0.5))
+        $g.RotateTransform([single]($i * 120))
+        $blade = New-Object System.Drawing.Drawing2D.GraphicsPath
+        $blade.AddBezier([single]0, [single](-$s * 0.035), [single](-$s * 0.15), [single](-$s * 0.13), [single](-$s * 0.06), [single](-$s * 0.34), [single]($s * 0.075), [single](-$s * 0.30))
+        $blade.AddBezier([single]($s * 0.075), [single](-$s * 0.30), [single]($s * 0.20), [single](-$s * 0.25), [single]($s * 0.09), [single](-$s * 0.07), [single]0, [single](-$s * 0.035))
+        $blade.CloseFigure()
+        $g.FillPath($ink, $blade)
+        $blade.Dispose()
+        $g.Restore($state)
+    }
+    $hubR = [single]($s * 0.075)
+    $g.FillEllipse($ink, [single]($s * 0.5 - $hubR), [single]($s * 0.5 - $hubR), [single]($hubR * 2), [single]($hubR * 2))
 
-    # Gauge ring with an opening at the bottom (matches the in-app gauge).
-    $pad = $size * 0.225
-    $arcRect = New-Object System.Drawing.RectangleF($pad, $pad, ($size - 2 * $pad), ($size - 2 * $pad))
-    $stroke = [single]([Math]::Max(1.6, $size * 0.088))
-    $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::White, $stroke)
-    $pen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
-    $pen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
-    $g.DrawArc($pen, $arcRect, 135, 270)
-
-    # End dot.
-    $radius = ($size - 2 * $pad) / 2
-    $angle = 45 * [Math]::PI / 180
-    $cx = $size / 2 + $radius * [Math]::Cos($angle)
-    $cy = $size / 2 + $radius * [Math]::Sin($angle)
-    $dotR = [single]($size * 0.080)
-    $white = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::White)
-    $g.FillEllipse($white, [single]($cx - $dotR), [single]($cy - $dotR), [single]($dotR * 2), [single]($dotR * 2))
-
-    # Hub.
-    $hubR = [single]($size * 0.058)
-    $g.FillEllipse($white, [single]($size / 2 - $hubR), [single]($size / 2 - $hubR), [single]($hubR * 2), [single]($hubR * 2))
-
-    $white.Dispose()
-    $pen.Dispose()
-    $hlBrush.Dispose()
-    $hl.Dispose()
-    $bg.Dispose()
-    $path.Dispose()
+    $ink.Dispose()
+    $background.Dispose()
+    $shell.Dispose()
     $g.Dispose()
     return $bmp
 }
@@ -114,7 +91,6 @@ foreach ($bytes in $pngs) { $bw.Write($bytes) }
 $bw.Close()
 $fs.Close()
 
-# Large PNG preview / README asset.
 $large = New-IconBitmap 512
 $large.Save((Join-Path $OutDir "macndowsfan.png"), [System.Drawing.Imaging.ImageFormat]::Png)
 $large.Dispose()

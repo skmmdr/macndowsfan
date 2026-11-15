@@ -70,7 +70,7 @@ class TrayService with TrayListener {
     }
 
     final fan = fans.first;
-    final setting = controller.fanSetting(fan.index);
+    final setting = controller.fanSetting(0);
     final mode = setting?.mode.label ?? 'Automatic';
     final rpm = fan.actual.isFinite ? fan.actual.round().toString() : '--';
     trayManager.setToolTip('macndowsfan | $rpm RPM | $mode');
@@ -113,8 +113,12 @@ class TrayService with TrayListener {
     _quitting = true;
     _log('quit requested');
 
+    if (!controller.prepareExit()) {
+      _quitting = false;
+      await showWindow();
+      return;
+    }
     controller.removeListener(_updateTooltip);
-    controller.prepareExit();
 
     try {
       trayManager.removeListener(this);
