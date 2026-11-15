@@ -39,7 +39,7 @@ Write-Host "==> Using NSIS: $makensis" -ForegroundColor Cyan
 # Check prerequisites in installer\redist
 $redistDir = Join-Path $root "installer\redist"
 $vcRedist = Join-Path $redistDir "VC_redist.x64.exe"
-$mfcSetup = Join-Path $redistDir "macsfancontrol_setup.exe"
+$driverSys = Join-Path $redistDir "applesmc.sys"
 
 if (-not (Test-Path $vcRedist)) {
     Write-Host "==> Downloading VC_redist.x64.exe to $vcRedist" -ForegroundColor Yellow
@@ -47,17 +47,14 @@ if (-not (Test-Path $vcRedist)) {
     curl.exe -L "https://aka.ms/vs/17/release/vc_redist.x64.exe" -o $vcRedist
 }
 
-if (-not (Test-Path $mfcSetup)) {
-    Write-Host "==> Downloading macsfancontrol_setup.exe to $mfcSetup" -ForegroundColor Yellow
-    New-Item -ItemType Directory -Force $redistDir | Out-Null
-    curl.exe -L "https://crystalidea.com/downloads/macsfancontrol_setup.exe" -o $mfcSetup
-}
-
-# Ensure VC DLLs are in dist
+# Ensure VC DLLs and applesmc.sys are in dist
 $vcDlls = Join-Path $redistDir "vc_dlls"
 $distDir = Join-Path $root "dist"
 if ((Test-Path $vcDlls) -and (Test-Path $distDir)) {
     Copy-Item (Join-Path $vcDlls "*.dll") $distDir -Force
+}
+if ((Test-Path $driverSys) -and (Test-Path $distDir)) {
+    Copy-Item $driverSys $distDir -Force
 }
 
 $nsiFile = Join-Path $root "installer\macndowsfan.nsi"

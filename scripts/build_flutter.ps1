@@ -59,6 +59,10 @@ $vcDlls = Join-Path $root "installer\redist\vc_dlls"
 if (Test-Path $vcDlls) {
     Copy-Item (Join-Path $vcDlls "*.dll") $bundle -Force
 }
+$driverSys = Join-Path $root "installer\redist\applesmc.sys"
+if (Test-Path $driverSys) {
+    Copy-Item $driverSys $bundle -Force
+}
 
 if (-not $Debug) {
     $dist = Join-Path $root "dist"
@@ -68,6 +72,9 @@ if (-not $Debug) {
     Copy-Item $coreDll $dist -Force
     if (Test-Path $vcDlls) {
         Copy-Item (Join-Path $vcDlls "*.dll") $dist -Force
+    }
+    if (Test-Path $driverSys) {
+        Copy-Item $driverSys $dist -Force
     }
     Write-Host "==> Built $dist\macndowsfan.exe" -ForegroundColor Green
     if ($Run) { Start-Process (Join-Path $dist "macndowsfan.exe") }

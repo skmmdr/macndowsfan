@@ -22,7 +22,7 @@ sharing the same Rust SMC core:
 Installs to `C:\Program Files\macndowsfan` and:
 
 * bundles the necessary **Microsoft Visual C++ 2015–2022 x64 runtime** (both local DLLs and system installer) so the app runs cleanly on fresh Windows installs;
-* bundles the signed **Apple SMC driver** package and installs/configures it automatically if `applesmc.sys` is not already present;
+* bundles the signed **Apple SMC kernel driver** (`applesmc.sys`) directly, creating and configuring the driver service without requiring Macs Fan Control software;
 * adds Start Menu and Desktop shortcuts;
 * registers **macndowsfan** in Apps & features (with uninstaller);
 * adds `HKCU\...\CurrentVersion\Run\macndowsfan` so the app **starts with
@@ -40,7 +40,7 @@ See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 The installer is fully self-contained:
 * **Visual C++ Runtime**: Packaged directly with the installer and distributed in `dist\`.
-* **Apple SMC Driver**: The installer automatically provisions `applesmc.sys` and the `AppleSMC` service so no manual driver hunting is required. If Macs Fan Control was previously installed, its signed driver is reused; otherwise the bundled signed package sets up the driver silently.
+* **Apple SMC Driver**: The installer ships the signed 32 KB `applesmc.sys` kernel driver binary directly and automatically provisions the `AppleSMC` service. Macs Fan Control is not required at all and can be completely uninstalled.
 
 ## Portable run
 

@@ -116,70 +116,33 @@ Section "macndowsfan" SecMain
     Delete "$PLUGINSDIR\VC_redist.x64.exe"
   ${EndIf}
 
-  ; Check if AppleSMC driver is already available
-  StrCpy $1 ""
-  IfFileExists "$INSTDIR\applesmc.sys" 0 +2
-    StrCpy $1 "$INSTDIR\applesmc.sys"
-  ${If} $1 == ""
-    IfFileExists "$PROGRAMFILES32\Macs Fan Control\applesmc.sys" 0 +2
-      StrCpy $1 "$PROGRAMFILES32\Macs Fan Control\applesmc.sys"
-  ${EndIf}
-  ${If} $1 == ""
-    IfFileExists "$PROGRAMFILES64\Macs Fan Control\applesmc.sys" 0 +2
-      StrCpy $1 "$PROGRAMFILES64\Macs Fan Control\applesmc.sys"
+  ; Ensure the signed applesmc.sys driver is present in the install folder
+  ${IfNot} ${FileExists} "$INSTDIR\applesmc.sys"
+    IfFileExists "${ROOT}\installer\redist\applesmc.sys" 0 +2
+      File /oname=$INSTDIR\applesmc.sys "${ROOT}\installer\redist\applesmc.sys"
   ${EndIf}
 
-  ; If AppleSMC driver is missing, install the bundled driver package
-  ${If} $1 == ""
-    DetailPrint "Apple SMC driver not found. Installing Apple SMC driver package..."
-    InitPluginsDir
-    File /oname=$PLUGINSDIR\mfc_setup.exe "${ROOT}\installer\redist\macsfancontrol_setup.exe"
-    nsExec::ExecToLog '"$PLUGINSDIR\mfc_setup.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-'
-    Delete "$PLUGINSDIR\mfc_setup.exe"
+  ; Terminate any conflicting third-party fan apps holding the exclusive \\.\APPLESMC lock
+  nsExec::ExecToLog 'taskkill.exe /F /IM MacsFanControl.exe'
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "Macs Fan Control"
+  DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "Macs Fan Control"
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "MacsFanControl"
+  DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "MacsFanControl"
 
-    ; Stop Macs Fan Control GUI if it was started, so it doesn't hold the exclusive SMC lock
-    nsExec::ExecToLog 'taskkill.exe /F /IM MacsFanControl.exe'
-
-    ; Remove Macs Fan Control from startup so macndowsfan manages fan speeds
-    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "Macs Fan Control"
-    DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "Macs Fan Control"
-    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "MacsFanControl"
-    DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "MacsFanControl"
-
-    ; Locate installed applesmc.sys
-    IfFileExists "$PROGRAMFILES32\Macs Fan Control\applesmc.sys" 0 +2
-      StrCpy $1 "$PROGRAMFILES32\Macs Fan Control\applesmc.sys"
-    ${If} $1 == ""
-      IfFileExists "$PROGRAMFILES64\Macs Fan Control\applesmc.sys" 0 +2
-        StrCpy $1 "$PROGRAMFILES64\Macs Fan Control\applesmc.sys"
-    ${EndIf}
-  ${EndIf}
-
-  ; Keep a local copy of the signed SMC driver in the app directory
-  ${If} $1 != ""
-    ${If} $1 != "$INSTDIR\applesmc.sys"
-      CopyFiles /SILENT "$1" "$INSTDIR\applesmc.sys"
-      IfFileExists "$INSTDIR\applesmc.sys" 0 +2
-        StrCpy $1 "$INSTDIR\applesmc.sys"
-    ${EndIf}
-  ${EndIf}
-
-  ; Configure and start AppleSMC driver service
+  ; Configure and start AppleSMC kernel driver service pointing to our local copy
   ReadRegStr $0 HKLM "SYSTEM\CurrentControlSet\Services\AppleSMC" "ImagePath"
   ${If} $0 != ""
-    ; Switch service to local copy so it remains intact even if Macs Fan Control is uninstalled
-    ${If} $1 == "$INSTDIR\applesmc.sys"
-      nsExec::ExecToLog 'sc.exe config AppleSMC binPath= "\??\$INSTDIR\applesmc.sys"'
-    ${EndIf}
+    ; Switch service to our local driver copy
+    nsExec::ExecToLog 'sc.exe config AppleSMC binPath= "\??\$INSTDIR\applesmc.sys"'
     DetailPrint "Configuring AppleSMC driver for boot start..."
     nsExec::ExecToLog 'sc.exe config AppleSMC start= auto'
     nsExec::ExecToLog 'sc.exe start AppleSMC'
-  ${ElseIf} $1 != ""
-    DetailPrint "Creating AppleSMC driver service..."
-    nsExec::ExecToLog 'sc.exe create AppleSMC type= kernel start= auto error= normal binPath= "\??\$1" DisplayName= "Apple SMC service"'
+  ${ElseIf} ${FileExists} "$INSTDIR\applesmc.sys"
+    DetailPrint "Creating AppleSMC kernel driver service..."
+    nsExec::ExecToLog 'sc.exe create AppleSMC type= kernel start= auto error= normal binPath= "\??\$INSTDIR\applesmc.sys" DisplayName= "Apple SMC service"'
     nsExec::ExecToLog 'sc.exe start AppleSMC'
   ${Else}
-    MessageBox MB_ICONEXCLAMATION|MB_OK "The AppleSMC driver was not found.$\r$\n$\r$\nmacndowsfan was installed, but fans and temperature sensors will not be accessible until the AppleSMC driver is installed."
+    MessageBox MB_ICONEXCLAMATION|MB_OK "The AppleSMC driver was not found.$\r$\n$\r$\nmacndowsfan was installed, but fans and temperature sensors will not be accessible until applesmc.sys is present."
   ${EndIf}
 SectionEnd
 
