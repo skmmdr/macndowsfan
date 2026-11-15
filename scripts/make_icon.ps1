@@ -1,8 +1,15 @@
 param(
+    [string]$SourceImage,
     [string]$OutDir = (Join-Path (Split-Path -Parent $PSScriptRoot) "assets")
 )
 
 $ErrorActionPreference = "Stop"
+
+if ($SourceImage -and (Test-Path $SourceImage)) {
+    & "$PSScriptRoot\convert_to_icon.ps1" -InputImage $SourceImage -OutDir $OutDir
+    exit $LASTEXITCODE
+}
+
 Add-Type -AssemblyName System.Drawing
 
 New-Item -ItemType Directory -Force $OutDir | Out-Null
