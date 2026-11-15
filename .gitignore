@@ -5,6 +5,7 @@
 /flutter_ui/.flutter-plugins
 /flutter_ui/.flutter-plugins-dependencies
 /installer/output
+/installer/redist/*.exe
 .freebuff/
 .vscode/
 .idea/

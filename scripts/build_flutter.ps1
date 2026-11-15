@@ -55,12 +55,20 @@ $coreDll = Join-Path $root "target\$profile\macndowsfan_core.dll"
 if (-not (Test-Path $bundle)) { throw "Flutter bundle not found: $bundle" }
 Copy-Item $coreDll $bundle -Force
 
+$vcDlls = Join-Path $root "installer\redist\vc_dlls"
+if (Test-Path $vcDlls) {
+    Copy-Item (Join-Path $vcDlls "*.dll") $bundle -Force
+}
+
 if (-not $Debug) {
     $dist = Join-Path $root "dist"
     if (Test-Path $dist) { Remove-Item $dist -Recurse -Force }
     New-Item -ItemType Directory -Force $dist | Out-Null
     Copy-Item (Join-Path $bundle "*") $dist -Recurse -Force
     Copy-Item $coreDll $dist -Force
+    if (Test-Path $vcDlls) {
+        Copy-Item (Join-Path $vcDlls "*.dll") $dist -Force
+    }
     Write-Host "==> Built $dist\macndowsfan.exe" -ForegroundColor Green
     if ($Run) { Start-Process (Join-Path $dist "macndowsfan.exe") }
 } else {

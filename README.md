@@ -21,14 +21,14 @@ sharing the same Rust SMC core:
 
 Installs to `C:\Program Files\macndowsfan` and:
 
+* bundles the necessary **Microsoft Visual C++ 2015–2022 x64 runtime** (both local DLLs and system installer) so the app runs cleanly on fresh Windows installs;
+* bundles the signed **Apple SMC driver** package and installs/configures it automatically if `applesmc.sys` is not already present;
 * adds Start Menu and Desktop shortcuts;
 * registers **macndowsfan** in Apps & features (with uninstaller);
 * adds `HKCU\...\CurrentVersion\Run\macndowsfan` so the app **starts with
   Windows**, hidden in the notification area (`--startup`);
-* copies the signed `applesmc.sys` already on the machine into the install
-  folder, creates the `AppleSMC` kernel service if it is missing (or points it
-  at that local copy when Macs Fan Control was removed) and sets it to
-  **AUTO_START**, so the app can open the SMC at login **without UAC**;
+* configures the `AppleSMC` kernel service for **AUTO_START** pointing at the local copy, so the app can open the SMC at login **without UAC prompts**;
+* disables conflicting Macs Fan Control background instances/startup entries so macndowsfan has exclusive SMC access;
 * starts the app when the installer finishes (interactive installs).
 
 The uninstaller keeps settings by default and removes the `AppleSMC` service
@@ -36,17 +36,11 @@ only when it points at macndowsfan's own driver copy.
 
 See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
-### Driver requirement
+### Prerequisites & driver handling
 
-Neither UI ships a kernel driver. They talk to `\\.\APPLESMC`, the signed
-`applesmc.sys` driver that **Macs Fan Control** installs. The installer reuses
-that driver file when it is present, so Macs Fan Control itself can be
-uninstalled afterwards. If the driver file is gone, install Macs Fan Control
-once to restore it.
-
-**If Macs Fan Control is still installed, quit it before running
-macndowsfan.** It opens the SMC device exclusively, so both programs cannot run
-at the same time.
+The installer is fully self-contained:
+* **Visual C++ Runtime**: Packaged directly with the installer and distributed in `dist\`.
+* **Apple SMC Driver**: The installer automatically provisions `applesmc.sys` and the `AppleSMC` service so no manual driver hunting is required. If Macs Fan Control was previously installed, its signed driver is reused; otherwise the bundled signed package sets up the driver silently.
 
 ## Portable run
 
@@ -157,15 +151,13 @@ The window is 1180×880 with a dark DWM title bar, the app icon from
 
 ### Installer
 
-Uses NSIS 3.11 (portable copy in `%TEMP%\kilo\nsis\nsis-3.11`):
+Automated build script (locates NSIS and packages all prerequisites):
 
 ```powershell
-& "$env:TEMP\kilo\nsis\nsis-3.11\makensis.exe" (Resolve-Path .\installer\macndowsfan.nsi).Path
-Copy-Item .\installer\output\macndowsfan-setup-0.3.0.exe .\dist\ -Force
+powershell -ExecutionPolicy Bypass -File .\scripts\build_installer.ps1
 ```
 
-The script installs `dist\*`, creates shortcuts, writes the startup entry,
-configures `AppleSMC` for boot start and registers the uninstaller.
+The script verifies prerequisites in `installer\redist\`, ensures VC++ runtime DLLs are present in `dist\`, invokes NSIS 3.11, and writes the output setup binary to `installer\output\macndowsfan-setup-0.3.0.exe` and `dist\macndowsfan-setup-0.3.0.exe`.
 
 ### Icon
 
